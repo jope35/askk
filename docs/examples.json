@@ -1,0 +1,502 @@
+[
+  {
+    "category": "Files and directories",
+    "input": "List all files in this folder",
+    "output": "ls -la"
+  },
+  {
+    "category": "Files and directories",
+    "input": "List hidden entries in this folder, not `.` or `..`",
+    "output": "find . -maxdepth 1 -name '.*' ! -name '.' ! -name '..'"
+  },
+  {
+    "category": "Files and directories",
+    "input": "Make a directory named tmp/cache, including parents",
+    "output": "mkdir -p -- tmp/cache"
+  },
+  {
+    "category": "Files and directories",
+    "input": "Create an empty file called notes.txt",
+    "output": "touch -- notes.txt"
+  },
+  {
+    "category": "Files and directories",
+    "input": "Show disk usage of this directory, human readable, one level",
+    "output": "du -h --max-depth=1 ."
+  },
+  {
+    "category": "Files and directories",
+    "input": "Print the ten largest files in this directory",
+    "output": "find . -maxdepth 1 -type f -printf '%s\\t%p\\n' | sort -nr | head -n 10"
+  },
+  {
+    "category": "Files and directories",
+    "input": "Count regular files in this folder, not recursive",
+    "output": "find . -maxdepth 1 -type f -printf '.' | wc -c"
+  },
+  {
+    "category": "Files and directories",
+    "input": "Goal: list contents of /var/log/nginx. Failed command: ls /var/log/nginx. Error: Permission denied",
+    "output": "namei -l /var/log/nginx; id"
+  },
+  {
+    "category": "Files and directories",
+    "input": "Print permissions of /etc/passwd in numeric form",
+    "output": "stat -c '%a %n' -- /etc/passwd"
+  },
+  {
+    "category": "Files and directories",
+    "input": "Follow the symlink at ./current and print the real path",
+    "output": "realpath -- ./current"
+  },
+  {
+    "category": "Find",
+    "input": "Pick up all PNG files here",
+    "output": "find . -maxdepth 1 -type f -name '*.png'"
+  },
+  {
+    "category": "Find",
+    "input": "Recursively find all Python files",
+    "output": "find . -type f -name '*.py'"
+  },
+  {
+    "category": "Find",
+    "input": "Find Python files larger than 1MB",
+    "output": "find . -type f -name '*.py' -size +1M"
+  },
+  {
+    "category": "Find",
+    "input": "Find all files larger than 100MB in my home directory",
+    "output": "find \"$HOME\" -type f -size +100M"
+  },
+  {
+    "category": "Find",
+    "input": "List all files modified in the last 7 days",
+    "output": "find . -type f -mtime -7"
+  },
+  {
+    "category": "Find",
+    "input": "Find files named exactly Makefile",
+    "output": "find . -type f -name Makefile"
+  },
+  {
+    "category": "Find",
+    "input": "Find empty files under ./src",
+    "output": "find ./src -type f -empty"
+  },
+  {
+    "category": "Find",
+    "input": "Find directories named node_modules at any depth",
+    "output": "find . -type d -name node_modules"
+  },
+  {
+    "category": "Find",
+    "input": "Find .log files under /var/log modified more than 30 days ago",
+    "output": "find /var/log -type f -name '*.log' -mtime +30"
+  },
+  {
+    "category": "Find",
+    "input": "List all .log files in /var/log modified in the last 24 hours, sorted by size",
+    "output": "find /var/log -type f -name '*.log' -mtime -1 -printf '%s\\t%p\\n' | sort -nr"
+  },
+  {
+    "category": "Find",
+    "input": "Find files with the user executable bit set under ./bin",
+    "output": "find ./bin -type f -perm -u+x"
+  },
+  {
+    "category": "Find",
+    "input": "Find files owned by root in ./data",
+    "output": "find ./data -user root"
+  },
+  {
+    "category": "Copy, move, rename",
+    "input": "Rename each folder that starts with `old-`",
+    "output": "for d in old-*/; do mv -- \"$d\" \"new-${d#old-}\"; done"
+  },
+  {
+    "category": "Copy, move, rename",
+    "input": "Rename file draft.txt to final.txt",
+    "output": "mv -- draft.txt final.txt"
+  },
+  {
+    "category": "Copy, move, rename",
+    "input": "Copy config.yaml to config.yaml.bak",
+    "output": "cp -- config.yaml config.yaml.bak"
+  },
+  {
+    "category": "Copy, move, rename",
+    "input": "Copy all .jpg files from ./incoming to ./photos",
+    "output": "find ./incoming -maxdepth 1 -type f -name '*.jpg' -exec cp -t ./photos -- {} +"
+  },
+  {
+    "category": "Copy, move, rename",
+    "input": "Move every .tmp file in this folder into ./trash",
+    "output": "find . -maxdepth 1 -type f -name '*.tmp' -exec mv -t ./trash -- {} +"
+  },
+  {
+    "category": "Copy, move, rename",
+    "input": "Create a symlink named ./app pointing at ./releases/current",
+    "output": "ln -s -- ./releases/current ./app"
+  },
+  {
+    "category": "Copy, move, rename",
+    "input": "Recursively copy ./src to ./src-backup, preserving timestamps and permissions",
+    "output": "cp -a -- ./src ./src-backup"
+  },
+  {
+    "category": "Copy, move, rename",
+    "input": "Change into ~/projects/askk",
+    "output": "cd -- \"$HOME/projects/askk\""
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Read the `name` of each item in `data.json` with `jq`",
+    "output": "jq -r '.items[].name' data.json"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Pretty-print data.json with jq",
+    "output": "jq . data.json"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Extract the version field from package.json with jq",
+    "output": "jq -r '.version' package.json"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Show the last 20 lines of app.log",
+    "output": "tail -n 20 -- app.log"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Follow nginx error log as it grows",
+    "output": "tail -F -- /var/log/nginx/error.log"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Show the first 10 lines of README.md",
+    "output": "head -n 10 -- README.md"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Count lines in access.log",
+    "output": "wc -l -- access.log"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Search for TODO in ./src recursively",
+    "output": "grep -R -- 'TODO' ./src"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Goal: recursively find the literal text error[42] in ./logs. Failed command: grep -R error[42] ./logs. Error: grep: Unmatched [ or [^",
+    "output": "grep -R -F -- 'error[42]' ./logs"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Replace foo with bar in place in config.txt and keep a backup",
+    "output": "sed -i.bak 's/foo/bar/g' -- config.txt"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Print the second column of data.csv, comma separated",
+    "output": "cut -d, -f2 -- data.csv"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Sort unique lines in names.txt",
+    "output": "sort -u -- names.txt"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Diff a.txt and b.txt, unified",
+    "output": "diff -u -- a.txt b.txt"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Search for redraw in this directory, print the first and third space-separated columns, then sort",
+    "output": "grep -F -- 'redraw' ./* | awk '{print $1, $3}' | sort"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Convert all text in names.txt to lowercase",
+    "output": "tr '[:upper:]' '[:lower:]' < names.txt"
+  },
+  {
+    "category": "Text and JSON",
+    "input": "Show which lines in left.txt are not in right.txt",
+    "output": "comm -23 <(sort -- left.txt) <(sort -- right.txt)"
+  },
+  {
+    "category": "Git",
+    "input": "Show git status",
+    "output": "git status"
+  },
+  {
+    "category": "Git",
+    "input": "Show a compact graph of the last 10 commits across all branches",
+    "output": "git log --oneline --graph --decorate --all -n 10"
+  },
+  {
+    "category": "Git",
+    "input": "Show git log for last week with author names",
+    "output": "git log --since='1 week ago' --pretty=format:'%h %an %s'"
+  },
+  {
+    "category": "Git",
+    "input": "Undo the most recent local commit but keep the changes staged",
+    "output": "git reset --soft HEAD~1"
+  },
+  {
+    "category": "Git",
+    "input": "List local branches",
+    "output": "git branch"
+  },
+  {
+    "category": "Git",
+    "input": "Create and switch to branch feature/login",
+    "output": "git checkout -b feature/login"
+  },
+  {
+    "category": "Git",
+    "input": "Stash uncommitted changes",
+    "output": "git stash push"
+  },
+  {
+    "category": "Git",
+    "input": "Reapply the latest stash and keep it in the stash list",
+    "output": "git stash apply"
+  },
+  {
+    "category": "Git",
+    "input": "Remove all .DS_Store files from git tracking without deleting them from disk",
+    "output": "git ls-files -z -- '.DS_Store' '**/.DS_Store' | xargs -0 -r git rm --cached --"
+  },
+  {
+    "category": "Git",
+    "input": "List git branches sorted by last commit",
+    "output": "git for-each-ref --sort=-committerdate --format='%(refname:short) %(committerdate:relative)' refs/heads"
+  },
+  {
+    "category": "Git",
+    "input": "Show unstaged changes",
+    "output": "git diff"
+  },
+  {
+    "category": "Git",
+    "input": "Stage all changes",
+    "output": "git add -A"
+  },
+  {
+    "category": "Git",
+    "input": "Commit staged changes with message fix parser",
+    "output": "git commit -m 'fix parser'"
+  },
+  {
+    "category": "Git",
+    "input": "Initialize a new git repository",
+    "output": "git init"
+  },
+  {
+    "category": "Git",
+    "input": "Show who last touched each line of src/main.c",
+    "output": "git blame -- src/main.c"
+  },
+  {
+    "category": "Git",
+    "input": "Show remote URLs",
+    "output": "git remote -v"
+  },
+  {
+    "category": "Docker",
+    "input": "List all running Docker containers",
+    "output": "docker ps"
+  },
+  {
+    "category": "Docker",
+    "input": "List all Docker containers including stopped ones",
+    "output": "docker ps -a"
+  },
+  {
+    "category": "Docker",
+    "input": "Show docker container resource usage",
+    "output": "docker stats"
+  },
+  {
+    "category": "Docker",
+    "input": "Open an interactive shell in the running container named api",
+    "output": "docker exec -it api /bin/bash"
+  },
+  {
+    "category": "Docker",
+    "input": "Copy /var/log/app.log from container api to ./app.log",
+    "output": "docker cp api:/var/log/app.log ./app.log"
+  },
+  {
+    "category": "Docker",
+    "input": "Follow logs for container api",
+    "output": "docker logs -f api"
+  },
+  {
+    "category": "Docker",
+    "input": "Show Docker disk usage and reclaimable space",
+    "output": "docker system df -v"
+  },
+  {
+    "category": "Docker",
+    "input": "Build an image tagged app:dev from this directory",
+    "output": "docker build -t app:dev ."
+  },
+  {
+    "category": "Processes",
+    "input": "Find processes using the most memory",
+    "output": "ps aux --sort=-%mem | head -n 11"
+  },
+  {
+    "category": "Processes",
+    "input": "List processes named nginx",
+    "output": "pgrep -a -x nginx"
+  },
+  {
+    "category": "Processes",
+    "input": "Kill processes named node with SIGTERM",
+    "output": "pkill -TERM -x node"
+  },
+  {
+    "category": "Processes",
+    "input": "Show what is listening on port 8080",
+    "output": "ss -ltnp 'sport = :8080'"
+  },
+  {
+    "category": "Processes",
+    "input": "Show which process has file ./lock held open",
+    "output": "lsof -- ./lock"
+  },
+  {
+    "category": "Processes",
+    "input": "Print my user id and groups",
+    "output": "id"
+  },
+  {
+    "category": "Processes",
+    "input": "Show free memory",
+    "output": "free -h"
+  },
+  {
+    "category": "System and services",
+    "input": "Show the last 50 journal entries for ssh.service without opening a pager",
+    "output": "journalctl -u ssh.service -n 50 --no-pager"
+  },
+  {
+    "category": "System and services",
+    "input": "Show status of nginx.service without a pager",
+    "output": "systemctl status nginx.service --no-pager"
+  },
+  {
+    "category": "System and services",
+    "input": "Restart nginx.service",
+    "output": "sudo systemctl restart nginx.service"
+  },
+  {
+    "category": "System and services",
+    "input": "List failed systemd units",
+    "output": "systemctl --failed --no-pager"
+  },
+  {
+    "category": "System and services",
+    "input": "Print OS identification",
+    "output": "cat /etc/os-release"
+  },
+  {
+    "category": "System and services",
+    "input": "Recursively chmod 777 on /",
+    "output": "! printf 'Cannot generate a safe command: %s\\n' 'Refusing recursive chmod on /' >&2"
+  },
+  {
+    "category": "System and services",
+    "input": "Show today's date in ISO format",
+    "output": "date -Iseconds"
+  },
+  {
+    "category": "Network and transfer",
+    "input": "Test whether github.com answers on HTTPS",
+    "output": "curl -I --fail --location -- https://github.com/"
+  },
+  {
+    "category": "Network and transfer",
+    "input": "Look up DNS A records for example.com",
+    "output": "dig +short A example.com"
+  },
+  {
+    "category": "Network and transfer",
+    "input": "Show my IPv4 addresses",
+    "output": "ip -4 -br addr"
+  },
+  {
+    "category": "Network and transfer",
+    "input": "Download https://example.com/file.tar.gz into ./file.tar.gz",
+    "output": "curl --fail --location -o file.tar.gz -- https://example.com/file.tar.gz"
+  },
+  {
+    "category": "Network and transfer",
+    "input": "Copy ./release.tgz to user@host:tmp/ with scp",
+    "output": "scp ./release.tgz user@host:tmp/"
+  },
+  {
+    "category": "Network and transfer",
+    "input": "Show established TCP connections",
+    "output": "ss -t state established"
+  },
+  {
+    "category": "Archives and sync",
+    "input": "Recursively gzip regular files under /var/log whose names end in .log and which were modified at least 31×24 hours ago",
+    "output": "find /var/log -type f -name '*.log' -mtime +30 -exec gzip -- {} +"
+  },
+  {
+    "category": "Archives and sync",
+    "input": "Create a tar.gz of ./src named src.tar.gz",
+    "output": "tar -czf src.tar.gz -- src"
+  },
+  {
+    "category": "Archives and sync",
+    "input": "Extract archive backup.tar.gz into a new empty directory ./restore",
+    "output": "mkdir -p -- ./restore && tar -xzf backup.tar.gz -C ./restore"
+  },
+  {
+    "category": "Archives and sync",
+    "input": "Dry-run rsync of ./data/ to /backup/data/, itemize changes, do not delete extras",
+    "output": "rsync -a --dry-run --itemize-changes -- ./data/ /backup/data/"
+  },
+  {
+    "category": "Safety, recovery, and uncertainty",
+    "input": "Delete empty directories below ./build, including parents that become empty during traversal, but not ./build itself",
+    "output": "find ./build -mindepth 1 -type d -empty -delete"
+  },
+  {
+    "category": "Safety, recovery, and uncertainty",
+    "input": "Install htop. No distro or package manager is provided.",
+    "output": "if [ -e /etc/os-release ]; then cat /etc/os-release; else cat /usr/lib/os-release; fi; command -v apt-get dnf yum zypper pacman apk"
+  },
+  {
+    "category": "Safety, recovery, and uncertainty",
+    "input": "Delete the file named --help in this folder",
+    "output": "rm -- --help"
+  },
+  {
+    "category": "Safety, recovery, and uncertainty",
+    "input": "Delete the old backup",
+    "output": "! printf 'Clarify: %s\\n' 'Which path should be deleted?' >&2"
+  },
+  {
+    "category": "Safety, recovery, and uncertainty",
+    "input": "How does find -mtime work?",
+    "output": "man find"
+  },
+  {
+    "category": "Safety, recovery, and uncertainty",
+    "input": "Wipe the disk",
+    "output": "! printf 'Cannot generate a safe command: %s\\n' 'No explicit block device or filesystem target' >&2"
+  }
+]
