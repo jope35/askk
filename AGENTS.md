@@ -2,7 +2,7 @@
 
 ## alwasy trigger these skills
 
-- simple-english\
+- simple-english
 - ponytail
 
 ## tool use
