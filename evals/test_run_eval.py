@@ -414,5 +414,23 @@ class MainTest(unittest.TestCase):
             self.assertEqual(code, 2)
 
 
+class DocsTest(unittest.TestCase):
+    def test_smoke_truncates(self):
+        with mock.patch.dict(os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False):
+            config = run_eval.parse_args(["--smoke"])
+            rows = run_eval.load_rows(config)
+        self.assertEqual(len(rows), 5)
+
+    def test_render_docs_matches_file(self):
+        rows = run_eval.load_dataset("docs/examples.json")
+        expected = open("docs/examples.md", encoding="utf-8").read()
+        self.assertEqual(run_eval.render_examples_md(rows), expected)
+
+    def test_render_docs_flag(self):
+        before = open("docs/examples.md", encoding="utf-8").read()
+        self.assertEqual(run_eval.main(["--render-docs"]), 0)
+        self.assertEqual(open("docs/examples.md", encoding="utf-8").read(), before)
+
+
 if __name__ == "__main__":
     unittest.main()

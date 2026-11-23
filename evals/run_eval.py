@@ -649,12 +649,10 @@ def run(config):
         print(f"error: {error}", file=sys.stderr)
         return 2
     try:
-        rows = load_dataset(config.dataset_path)
+        rows = load_rows(config)
     except (OSError, ValueError) as error:
         print(f"error: cannot load dataset: {error}", file=sys.stderr)
         return 2
-    if config.smoke:
-        rows = rows[:5]
     server = None
     try:
         server = start_transport(config)
@@ -748,12 +746,55 @@ def run(config):
     return compute_exit(passed, len(scored), errors, config.min_pass_rate)
 
 
+EXAMPLES_HEADER = """# Example requests
+
+One hundred natural-language requests and the one-line Bash command the agent should return.
+
+Grounded in `docs/agent-spec.md` and `.opencode/agents/bash.md`. Devin Desktop Terminal Command is the UX analog: natural language in the terminal (`Cmd`/`Ctrl+I`) yields CLI syntax, then the user reviews before run ([Command overview](https://docs.devin.ai/desktop/command/windsurf-overview), [Terminal](https://docs.devin.ai/desktop/terminal.md)). Categories follow public NL-to-shell tools (Copilot CLI `suggest`, Warp AI Command Search): files, find, git, docker, processes, jq/text, systemd, curl, tar/rsync, failed-command repair, and refuse-or-clarify.
+
+Format matches the agent prompt: Input, then Output. Each output is one syntactically complete Bash line: no fences, no preamble, no here-document.
+
+"""
+
+
+def truncate_rows(rows, smoke):
+    return rows[:5] if smoke else rows
+
+
+def load_rows(config):
+    return truncate_rows(load_dataset(config.dataset_path), config.smoke)
+
+
+def render_examples_md(rows):
+    parts = [EXAMPLES_HEADER]
+    category = None
+    for row in rows:
+        if row.category != category:
+            category = row.category
+            parts.append(f"## {category}\n\n")
+        parts.append(f"Input: {row.input}\nOutput: {row.output}\n\n")
+    text = "".join(parts)
+    return text[:-1] if text.endswith("\n\n") else text
+
+
+def write_examples_md(rows, path):
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(render_examples_md(rows))
+    return path
+
+
 def main(argv=None):
     config = parse_args(sys.argv[1:] if argv is None else argv)
     if config.render_docs:
+        try:
+            rows = load_rows(config)
+        except (OSError, ValueError) as error:
+            print(f"error: cannot load dataset: {error}", file=sys.stderr)
+            return 2
+        path = os.path.join(os.path.dirname(config.dataset_path), "examples.md")
+        print(f"wrote {write_examples_md(rows, path)}")
         return 0
     return run(config)
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
