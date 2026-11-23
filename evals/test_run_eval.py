@@ -234,5 +234,129 @@ class SandboxTest(unittest.TestCase):
             )
 
 
+class JudgeTest(unittest.TestCase):
+    def config(self):
+        return run_eval.Config(judge_model="provider/judge")
+
+    def test_judge_yes_and_no(self):
+        for answer, expected in (("Yes\n", "yes"), ("no\n", "no"), (" YES ", "yes")):
+            with self.subTest(answer=answer):
+                def fake_run(cmd, **kwargs):
+                    return subprocess.CompletedProcess(cmd, 0, answer, "")
+
+                row = run_eval.Row(0, "c", "request", "expected")
+                self.assertEqual(run_eval.judge_row(self.config(), row, "generated", fake_run), expected)
+
+    def test_judge_rejects_prose_and_errors(self):
+        def prose(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 0, "The command looks fine.\n", "")
+
+        def timeout(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, 30)
+
+        def broken(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 1, "", "rate limit")
+
+        row = run_eval.Row(0, "c", "request", "expected")
+        for fake_run in (prose, timeout, broken):
+            with self.subTest(fake_run=fake_run):
+                with self.assertRaises(run_eval.JudgeError):
+                    run_eval.judge_row(self.config(), row, "generated", fake_run)
+
+    def test_judge_prompt_and_command(self):
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            seen["timeout"] = kwargs["timeout"]
+            return subprocess.CompletedProcess(cmd, 0, "yes", "")
+
+        row = run_eval.Row(0, "c", "list files", "ls -la")
+        run_eval.judge_row(self.config(), row, "ls -a", fake_run)
+        prompt = seen["cmd"][-1]
+        self.assertIn("list files", prompt)
+        self.assertIn("ls -la", prompt)
+        self.assertIn("ls -a", prompt)
+        self.assertIn("--model", seen["cmd"])
+        self.assertIn("provider/judge", seen["cmd"])
+        self.assertNotIn("--agent", seen["cmd"])
+        self.assertEqual(seen["timeout"], 30)
+
+    def test_run_judge_maps(self):
+        rows = [
+            (run_eval.Row(0, "c", "a", "x"), "x"),
+            (run_eval.Row(1, "c", "b", "y"), "z"),
+        ]
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 0, "yes", "")
+
+        result = run_eval.run_judge(self.config(), rows, run=fake_run)
+        self.assertEqual(result, {0: "yes", 1: "yes"})
+
+
+class JudgeTest(unittest.TestCase):
+    def config(self):
+        return run_eval.Config(model="provider/agent", judge_model="provider/judge")
+
+    def row(self):
+        return run_eval.Row(0, "c", "list the files", "ls -la")
+
+    def test_judge_yes_and_no(self):
+        def yes(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 0, "Yes\n", "")
+
+        def no(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 0, "no\n", "")
+
+        self.assertEqual(run_eval.judge_row(self.config(), self.row(), "ls", run=yes), "yes")
+        self.assertEqual(run_eval.judge_row(self.config(), self.row(), "ls", run=no), "no")
+
+    def test_judge_rejects_prose(self):
+        def prose(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 0, "The command looks right.\n", "")
+
+        with self.assertRaises(run_eval.JudgeError):
+            run_eval.judge_row(self.config(), self.row(), "ls", run=prose)
+
+    def test_judge_timeout(self):
+        def slow(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, 30)
+
+        with self.assertRaises(run_eval.JudgeError):
+            run_eval.judge_row(self.config(), self.row(), "ls", run=slow)
+
+    def test_judge_prompt_and_command(self):
+        seen = {}
+
+        def fake(cmd, **kwargs):
+            seen["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, "yes", "")
+
+        run_eval.judge_row(self.config(), self.row(), "ls", run=fake)
+        prompt = seen["cmd"][-1]
+        self.assertIn("list the files", prompt)
+        self.assertIn("ls -la", prompt)
+        self.assertIn("Generated command:\nls", prompt)
+        self.assertIn("--model", seen["cmd"])
+        self.assertIn("provider/judge", seen["cmd"])
+        self.assertNotIn("--agent", seen["cmd"])
+
+    def test_run_judge_maps(self):
+        rows = [
+            (run_eval.Row(0, "c", "a", "ls"), "ls"),
+            (run_eval.Row(1, "c", "b", "pwd"), "pwd"),
+        ]
+
+        def fake(cmd, **kwargs):
+            if "Generated command:\npwd" in cmd[-1]:
+                raise subprocess.TimeoutExpired(cmd, 30)
+            return subprocess.CompletedProcess(cmd, 0, "yes", "")
+
+        result = run_eval.run_judge(self.config(), rows, run=fake)
+        self.assertEqual(result[0], "yes")
+        self.assertIsInstance(result[1], run_eval.JudgeError)
+
+
 if __name__ == "__main__":
     unittest.main()
