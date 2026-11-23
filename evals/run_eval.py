@@ -18,7 +18,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 
 DEFAULT_MODEL = "claude-agent/system.ai.claude-haiku-5-5"
@@ -431,10 +430,9 @@ def parse_rewards(jobs_dir, task_names):
     return {name: found.get(name, "error") for name in task_names}
 
 
-def run_sandbox(config, jobs):
-    workspace = tempfile.mkdtemp(prefix="askk-eval-")
-    tasks_dir = os.path.join(workspace, "tasks")
-    jobs_dir = os.path.join(workspace, "jobs")
+def run_sandbox(config, jobs, run_dir, repeat_index):
+    tasks_dir = os.path.join(run_dir, "tasks", f"r{repeat_index}")
+    jobs_dir = os.path.join(run_dir, "jobs")
     for row, command in jobs:
         build_task_dir(tasks_dir, row, command)
     cmd = [
@@ -449,7 +447,7 @@ def run_sandbox(config, jobs):
         "-o",
         jobs_dir,
         "--job-name",
-        "askk-eval",
+        f"r{repeat_index}",
         "--yes",
     ]
     try:
@@ -479,10 +477,23 @@ def compute_exit(passed, total, errors, min_pass_rate):
     return 0
 
 
-def write_results(results_dir, table):
+def make_run_dir(results_dir, suffix=""):
+    """Create a run folder, adding -2, -3 when the timestamp is taken."""
+    stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ") + suffix
     os.makedirs(results_dir, exist_ok=True)
-    stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
-    path = os.path.join(results_dir, f"{stamp}.json")
+    candidate = os.path.join(results_dir, stamp)
+    attempt = 2
+    while True:
+        try:
+            os.makedirs(candidate, exist_ok=False)
+            return candidate
+        except FileExistsError:
+            candidate = os.path.join(results_dir, f"{stamp}-{attempt}")
+            attempt += 1
+
+
+def write_results(run_dir, table):
+    path = os.path.join(run_dir, "results.json")
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(table, handle, indent=2)
         handle.write("\n")
@@ -546,6 +557,7 @@ def run(config):
     except HarnessError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
+    run_dir = make_run_dir(config.results_dir)
     try:
         table = []
         for repeat_index in range(config.repeat):
@@ -588,7 +600,11 @@ def run(config):
                 for record, row in records
                 if record["generated"] is not None
             ]
-            sandbox = run_sandbox(config, sandbox_jobs) if sandbox_jobs else {}
+            sandbox = (
+                run_sandbox(config, sandbox_jobs, run_dir, repeat_index)
+                if sandbox_jobs
+                else {}
+            )
             for record, _row in records:
                 if record["final"] == "error" or record["generated"] is None:
                     continue
@@ -620,8 +636,9 @@ def run(config):
     finally:
         stop_server(server)
     print(render_report(table, config.repeat))
-    path = write_results(config.results_dir, table)
+    path = write_results(run_dir, table)
     print(f"results: {path}")
+    print(f"browse: harbor view {os.path.join(run_dir, 'jobs')}")
     scored = [item for item in table if item["final"] != "error"]
     passed = sum(1 for item in scored if item["final"] == "yes")
     errors = sum(1 for item in table if item["final"] == "error")
@@ -709,11 +726,19 @@ def main(argv=None):
 
 def run_reference(config, rows):
     """Run each expected command in its task. A failure is a dataset or setup bug."""
-    rewards = run_sandbox(config, [(row, row.output) for row in rows])
+    run_dir = make_run_dir(config.results_dir, "-reference")
+    rewards = run_sandbox(config, [(row, row.output) for row in rows], run_dir, 0)
     failed = [row for row in rows if rewards[row.index] != "yes"]
     for row in failed:
         print(f"{rewards[row.index]}: {row.id} | {row.output}")
     print(f"reference: {len(rows) - len(failed)}/{len(rows)} tasks pass")
+    table = [
+        {"id": row.id, "output": row.output, "sandbox": rewards[row.index]}
+        for row in rows
+    ]
+    path = write_results(run_dir, table)
+    print(f"results: {path}")
+    print(f"browse: harbor view {os.path.join(run_dir, 'jobs')}")
     if any(rewards[row.index] == "error" for row in rows):
         return 2
     return 1 if failed else 0

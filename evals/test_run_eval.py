@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import subprocess
@@ -264,6 +265,23 @@ class SandboxTest(unittest.TestCase):
         result = run_eval.parse_rewards(jobs, ["a", "a-b", "c"])
         self.assertEqual(result, {"a": "yes", "a-b": "no", "c": "error"})
 
+    def test_run_sandbox_persists(self):
+        row = run_eval.Row(0, "c", "list the files", "ls", "a")
+        run_dir = os.path.join(self.tmp.name, "run")
+        os.makedirs(run_dir)
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch("run_eval.subprocess.run", side_effect=fake_run):
+            run_eval.run_sandbox(run_eval.Config(), [(row, "ls")], run_dir, 1)
+        self.assertTrue(os.path.isdir(os.path.join(run_dir, "tasks", "r1", "a")))
+        cmd = seen["cmd"]
+        self.assertEqual(cmd[cmd.index("-o") + 1], os.path.join(run_dir, "jobs"))
+        self.assertEqual(cmd[cmd.index("--job-name") + 1], "r1")
+
     def test_verifier_script_branches(self):
         normal = run_eval.Row(0, "c", "a", "true")
         refusal = run_eval.Row(
@@ -418,11 +436,26 @@ class ScoringTest(unittest.TestCase):
         self.assertIn("bad: bad row", section)
         self.assertNotIn("error row", section)
 
+    def test_make_run_dir_unique(self):
+        frozen = datetime.datetime(2026, 11, 23, 12, 0, 0, tzinfo=datetime.UTC)
+        clock = mock.MagicMock()
+        clock.datetime.now.return_value = frozen
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch("run_eval.datetime", clock):
+                first = run_eval.make_run_dir(directory)
+                second = run_eval.make_run_dir(directory)
+            self.assertTrue(os.path.isdir(first))
+            self.assertTrue(os.path.isdir(second))
+            self.assertEqual(os.path.basename(first), "20261123T120000Z")
+            self.assertEqual(os.path.basename(second), "20261123T120000Z-2")
+
     def test_write_results_name(self):
         with tempfile.TemporaryDirectory() as directory:
             table = [self.item()]
-            path = run_eval.write_results(directory, table)
-            self.assertRegex(os.path.basename(path), r"^\d{8}T\d{6}Z\.json$")
+            run_dir = run_eval.make_run_dir(directory)
+            path = run_eval.write_results(run_dir, table)
+            self.assertEqual(os.path.basename(path), "results.json")
+            self.assertRegex(os.path.basename(run_dir), r"^\d{8}T\d{6}Z$")
             with open(path, encoding="utf-8") as handle:
                 self.assertEqual(json.load(handle), table)
 
@@ -474,7 +507,11 @@ class MainTest(unittest.TestCase):
                         return_value={0: "ls\n", 1: "echo hi\n"},
                     ):
                         with mock.patch(
-                            "run_eval.run_sandbox", return_value={0: "no", 1: "yes"}
+                            "run_eval.run_sandbox",
+                            side_effect=lambda config, jobs, run_dir, repeat_index: {
+                                0: "no",
+                                1: "yes",
+                            },
                         ):
                             with mock.patch("run_eval.run_judge", return_value={}):
                                 code = run_eval.main(
@@ -483,7 +520,12 @@ class MainTest(unittest.TestCase):
             self.assertEqual(code, 0)
             files = os.listdir(results)
             self.assertEqual(len(files), 1)
-            table = json.load(open(os.path.join(results, files[0]), encoding="utf-8"))
+            run_dir = os.path.join(results, files[0])
+            self.assertTrue(os.path.isdir(run_dir))
+            with open(
+                os.path.join(run_dir, "results.json"), encoding="utf-8"
+            ) as handle:
+                table = json.load(handle)
             self.assertEqual([item["final"] for item in table], ["yes", "yes"])
             self.assertEqual({item["match"] for item in table}, {"yes", "no"})
 
@@ -574,22 +616,33 @@ class TaskFlagsTest(unittest.TestCase):
             self.assertEqual(command, rows[0].output + "\n")
 
     def test_reference_reports_failures(self):
-        def fake(config, jobs):
+        def fake(config, jobs, run_dir, repeat_index):
             return {row.index: ("no" if row.index == 1 else "yes") for row, _ in jobs}
 
-        with mock.patch("run_eval.run_sandbox", side_effect=fake) as sandbox:
-            code = run_eval.main(["--reference", "--smoke"])
-        self.assertEqual(code, 1)
-        jobs = sandbox.call_args.args[1]
-        self.assertEqual(
-            [command for row, command in jobs], [r.output for r, _ in jobs]
-        )
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch("run_eval.run_sandbox", side_effect=fake) as sandbox:
+                code = run_eval.main(
+                    ["--reference", "--smoke", "--results-dir", directory]
+                )
+            self.assertEqual(code, 1)
+            jobs = sandbox.call_args.args[1]
+            self.assertEqual(
+                [command for row, command in jobs], [r.output for r, _ in jobs]
+            )
+            folders = os.listdir(directory)
+            self.assertEqual(len(folders), 1)
+            self.assertTrue(folders[0].endswith("-reference"))
 
-        with mock.patch(
-            "run_eval.run_sandbox",
-            side_effect=lambda c, j: {r.index: "error" for r, _ in j},
-        ):
-            self.assertEqual(run_eval.main(["--reference", "--smoke"]), 2)
+            with mock.patch(
+                "run_eval.run_sandbox",
+                side_effect=lambda c, j, r, i: {row.index: "error" for row, _ in j},
+            ):
+                self.assertEqual(
+                    run_eval.main(
+                        ["--reference", "--smoke", "--results-dir", directory]
+                    ),
+                    2,
+                )
 
 
 class DocsTest(unittest.TestCase):

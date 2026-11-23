@@ -32,7 +32,7 @@ The open choice was the text leg.
 ### Files
 
 - `evals/run_eval.py` is the runner. It uses the standard library only. It loads `docs/examples.json`, runs the agent calls in parallel, scores every result, prints a report, writes a results file, and exits with a status code.
-- `evals/results/` receives one JSON file per run, named with the UTC timestamp of the run.
+- `evals/results/` receives one folder per run, named with the UTC timestamp of the run. The folder holds `results.json`, the tasks that ran in `tasks/r<N>/`, and the Harbor output in `jobs/r<N>/`.
 - `evals/test_run_eval.py` holds unit tests for the extraction and the exact match scorer.
 
 There is no `requirements.txt`: the runner needs no package beyond the standard library.
@@ -105,7 +105,7 @@ A configuration or preflight failure stops the run before scoring. Agent, sandbo
 
 ### Report
 
-The runner prints one line per example: category, the match, execution, and judge columns, the final yes or no, the expected command, and the generated command truncated to 80 characters. It then prints the pass rate overall and one pass rate per category. It writes the full result table, every column included, to `evals/results/TIMESTAMP.json`. A run that stops before the first agent call writes no results file.
+The runner prints one line per example: category, the match, execution, and judge columns, the final yes or no, the expected command, and the generated command truncated to 80 characters. It then prints the pass rate overall and one pass rate per category. It writes the full result table, every column included, to `evals/results/TIMESTAMP/results.json`. The same folder holds the tasks that ran in `tasks/r<N>/` and the Harbor output in `jobs/r<N>/`, so `harbor view evals/results/TIMESTAMP/jobs` shows the trials of the run. A run that stops before the first agent call writes no run folder.
 
 The `--repeat N` flag runs each example N times, default 1. Each run counts as one row in the pass rate. The report shows the fraction of runs that pass for each example. Because the dataset is not verified, the report also lists rows that fail in every repeat as candidate dataset bugs, separate from agent failures. A row that errors in every repeat is an error row, not a candidate dataset bug.
 
