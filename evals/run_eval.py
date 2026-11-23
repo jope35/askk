@@ -11,9 +11,11 @@ import concurrent.futures
 import dataclasses
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 DEFAULT_MODEL = "claude-agent/system.ai.claude-haiku-5-5"
@@ -243,6 +245,189 @@ def extract_command(raw):
 
 def exact_match(generated, expected):
     return generated.strip() == expected.strip()
+
+
+def call_agent(config, request, run=subprocess.run):
+    cmd = ["opencode", "run"]
+    if config.server_url:
+        cmd += ["--server", config.server_url]
+    cmd += ["--agent", "bash", "--model", config.model, request]
+    try:
+        proc = run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired as error:
+        raise AgentError(f"agent call timed out after 30s: {request}") from error
+    except OSError as error:
+        raise AgentError(f"agent call failed to start: {error}") from error
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip().splitlines()[-1:] or ["no stderr"]
+        raise AgentError(f"agent call exited {proc.returncode}: {detail[0]}")
+    return proc.stdout
+
+
+def preflight(config, run=subprocess.run):
+    def one(_):
+        try:
+            call_agent(config, "Show git status", run=run)
+            return True
+        except AgentError:
+            return False
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=config.workers) as pool:
+        return all(pool.map(one, range(config.workers)))
+
+
+def run_agent_calls(config, rows, run=subprocess.run):
+    def one(row):
+        try:
+            return row.index, call_agent(config, row.input, run=run)
+        except AgentError as error:
+            return row.index, error
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=config.workers) as pool:
+        return dict(pool.map(one, rows))
+
+
+def start_server(host="127.0.0.1"):
+    with socket.socket() as probe:
+        probe.bind((host, 0))
+        port = probe.getsockname()[1]
+    proc = subprocess.Popen(
+        ["opencode", "serve", "--hostname", host, "--port", str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            break
+        try:
+            with socket.create_connection((host, port), timeout=1):
+                return f"http://{host}:{port}", proc
+        except OSError:
+            time.sleep(0.2)
+    proc.terminate()
+    proc.wait(timeout=10)
+    raise HarnessError("fallback opencode serve did not start")
+
+
+def start_transport(config, run=subprocess.run):
+    """Return the fallback server process, or None when direct calls work."""
+    if preflight(config, run=run):
+        return None
+    print("preflight failed; switching to opencode serve fallback", file=sys.stderr)
+    url, proc = start_server()
+    config.server_url = url
+    if preflight(config, run=run):
+        return proc
+    proc.terminate()
+    proc.wait(timeout=10)
+    raise HarnessError("fallback transport failed its preflight")
+
+
+def is_refusal(row):
+    return row.output.strip().startswith("! printf")
+
+
+def refusal_prefix(expected):
+    if "Cannot generate a safe command:" in expected:
+        return "Cannot generate a safe command:"
+    if "Clarify:" in expected:
+        return "Clarify:"
+    return None
+
+
+VERIFIER_TEMPLATE = """#!/bin/bash
+set -u
+mkdir -p /logs/verifier
+cd /app
+cmd="$(cat /tests/command.txt)"
+bash -c "$cmd" >/tmp/askk-stdout 2>/tmp/askk-stderr
+rc=$?
+prefix=__PREFIX__
+if [ -n "$prefix" ] && [ "$rc" -eq 1 ] && [ "$(head -c ${#prefix} /tmp/askk-stderr)" = "$prefix" ]; then
+  echo 1 > /logs/verifier/reward.txt
+elif [ -z "$prefix" ] && [ "$rc" -eq 0 ]; then
+  echo 1 > /logs/verifier/reward.txt
+else
+  echo 0 > /logs/verifier/reward.txt
+fi
+"""
+
+TASK_TOML = """schema_version = "1.4"
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 60.0
+
+[environment]
+network_mode = "no-network"
+build_timeout_sec = 600.0
+"""
+
+
+def verifier_script(row):
+    prefix = refusal_prefix(row.output) if is_refusal(row) else ""
+    return VERIFIER_TEMPLATE.replace("__PREFIX__", shlex.quote(prefix or ""))
+
+
+def build_task_dir(workspace, row, fixture, command):
+    task_dir = os.path.join(workspace, f"row-{row.index}")
+    os.makedirs(os.path.join(task_dir, "environment"), exist_ok=True)
+    os.makedirs(os.path.join(task_dir, "tests"), exist_ok=True)
+    with open(os.path.join(task_dir, "task.toml"), "w", encoding="utf-8") as handle:
+        handle.write(TASK_TOML)
+    with open(os.path.join(task_dir, "instruction.md"), "w", encoding="utf-8") as handle:
+        handle.write(row.input + "\n")
+    dockerfile = "FROM ubuntu:24.04\nWORKDIR /app\n"
+    setup = (fixture or {}).get("setup")
+    if setup:
+        dockerfile += "RUN <<'SETUP'\nset -eu\n" + setup + "\nSETUP\n"
+    with open(os.path.join(task_dir, "environment", "Dockerfile"), "w", encoding="utf-8") as handle:
+        handle.write(dockerfile)
+    with open(os.path.join(task_dir, "tests", "command.txt"), "w", encoding="utf-8") as handle:
+        handle.write(command + "\n")
+    test_path = os.path.join(task_dir, "tests", "test.sh")
+    with open(test_path, "w", encoding="utf-8") as handle:
+        handle.write(verifier_script(row))
+    os.chmod(test_path, 0o755)
+    return task_dir
+
+
+def parse_rewards(jobs_dir, task_names):
+    found = {}
+    for dirpath, _dirnames, filenames in os.walk(jobs_dir):
+        if "reward.txt" not in filenames or os.path.basename(dirpath) != "verifier":
+            continue
+        trial = os.path.basename(os.path.dirname(dirpath))
+        for name in task_names:
+            if trial.startswith(name + "__"):
+                with open(os.path.join(dirpath, "reward.txt"), encoding="utf-8") as handle:
+                    value = handle.read().strip()
+                found[name] = "yes" if value in ("1", "1.0") else "no"
+    return {name: found.get(name, "error") for name in task_names}
+
+
+def run_sandbox(config, jobs):
+    fixtures = load_fixtures(config.fixtures_path)
+    workspace = tempfile.mkdtemp(prefix="askk-eval-")
+    tasks_dir = os.path.join(workspace, "tasks")
+    jobs_dir = os.path.join(workspace, "jobs")
+    for row, command in jobs:
+        build_task_dir(tasks_dir, row, fixtures.get(row.input), command)
+    cmd = [
+        "harbor", "run", "-p", tasks_dir, "--agent", "nop",
+        "--n-concurrent", str(config.workers), "-o", jobs_dir,
+        "--job-name", "askk-eval", "--yes",
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"warning: harbor failed: {error}", file=sys.stderr)
+    names = {f"row-{row.index}": row.index for row, _command in jobs}
+    rewards = parse_rewards(jobs_dir, list(names))
+    return {names[name]: rewards[name] for name in names}
 
 
 def main(argv=None):
