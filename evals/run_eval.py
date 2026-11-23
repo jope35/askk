@@ -8,10 +8,11 @@ miss both exact match and the sandbox.
 
 import argparse
 import concurrent.futures
-import datetime
 import dataclasses
+import datetime
 import json
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -21,7 +22,6 @@ import time
 
 DEFAULT_MODEL = "claude-agent/system.ai.claude-haiku-5-5"
 DEFAULT_DATASET = "docs/examples.json"
-DEFAULT_FIXTURES = "evals/fixtures.json"
 DEFAULT_RESULTS = "evals/results"
 
 
@@ -40,7 +40,6 @@ class JudgeError(Exception):
 @dataclasses.dataclass
 class Config:
     dataset_path: str = DEFAULT_DATASET
-    fixtures_path: str = DEFAULT_FIXTURES
     results_dir: str = DEFAULT_RESULTS
     workers: int = 8
     repeat: int = 1
@@ -50,6 +49,8 @@ class Config:
     model: str = DEFAULT_MODEL
     judge_model: str | None = None
     render_docs: bool = False
+    build_tasks: str | None = None
+    reference: bool = False
     server_url: str | None = None
 
 
@@ -59,12 +60,24 @@ class Row:
     category: str
     input: str
     output: str
+    id: str = ""
+    setup: str | None = None
+    expect: str = "exit0"
+
+
+# What the verifier accepts per `expect`: exit 0, or exit 1 with this stderr prefix.
+EXPECT_PREFIX = {
+    "exit0": "",
+    "clarify": "Clarify:",
+    "refuse": "Cannot generate a safe command:",
+}
+# Harbor names a trial after the first 32 characters of the task name.
+ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
-    parser.add_argument("--fixtures", default=DEFAULT_FIXTURES)
     parser.add_argument("--results-dir", default=DEFAULT_RESULTS)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--repeat", type=int, default=1)
@@ -72,10 +85,11 @@ def parse_args(argv):
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--no-judge", action="store_true")
     parser.add_argument("--render-docs", action="store_true")
+    parser.add_argument("--build-tasks", metavar="DIR")
+    parser.add_argument("--reference", action="store_true")
     args = parser.parse_args(argv)
     return Config(
         dataset_path=args.dataset,
-        fixtures_path=args.fixtures,
         results_dir=args.results_dir,
         workers=args.workers,
         repeat=args.repeat,
@@ -85,24 +99,38 @@ def parse_args(argv):
         model=os.environ.get("ASKK_MODEL", DEFAULT_MODEL),
         judge_model=os.environ.get("ASKK_JUDGE_MODEL"),
         render_docs=args.render_docs,
+        build_tasks=args.build_tasks,
+        reference=args.reference,
     )
 
 
 def load_dataset(path):
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
-    return [
-        Row(index=index, category=item["category"], input=item["input"], output=item["output"])
+    rows = [
+        Row(
+            index=index,
+            category=item["category"],
+            input=item["input"],
+            output=item["output"],
+            id=item.get("id", ""),
+            setup=item.get("setup"),
+            expect=item.get("expect", "exit0"),
+        )
         for index, item in enumerate(data)
     ]
-
-
-def load_fixtures(path):
-    try:
-        with open(path, encoding="utf-8") as handle:
-            return json.load(handle)
-    except FileNotFoundError:
-        return {}
+    seen = set()
+    for row in rows:
+        if not ID_PATTERN.match(row.id):
+            raise ValueError(
+                f"row {row.index}: id {row.id!r} must be 1-32 of a-z, 0-9, -"
+            )
+        if row.id in seen:
+            raise ValueError(f"row {row.index}: duplicate id {row.id!r}")
+        if row.expect not in EXPECT_PREFIX:
+            raise ValueError(f"row {row.index}: unknown expect {row.expect!r}")
+        seen.add(row.id)
+    return rows
 
 
 def validate_judge_config(config):
@@ -168,7 +196,9 @@ def exact_match(generated, expected):
 
 def call_agent(config, request, run=subprocess.run):
     try:
-        proc = run(agent_command(config, request), capture_output=True, text=True, timeout=30)
+        proc = run(
+            agent_command(config, request), capture_output=True, text=True, timeout=30
+        )
     except subprocess.TimeoutExpired as error:
         raise AgentError(f"agent call timed out after 30s: {request}") from error
     except OSError as error:
@@ -218,7 +248,9 @@ The generated command may differ from the expected command in quoting or flag or
 
 
 def judge_prompt(row, generated):
-    return JUDGE_PROMPT.format(request=row.input, expected=row.output, generated=generated)
+    return JUDGE_PROMPT.format(
+        request=row.input, expected=row.output, generated=generated
+    )
 
 
 def judge_row(config, row, generated, run=subprocess.run):
@@ -233,10 +265,14 @@ def judge_row(config, row, generated, run=subprocess.run):
     except OSError as error:
         raise JudgeError(f"judge call failed to start: {error}") from error
     if proc.returncode != 0:
-        raise JudgeError(f"judge call exited {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
+        raise JudgeError(
+            f"judge call exited {proc.returncode}: {(proc.stderr or '').strip()[:200]}"
+        )
     answer = select_command(proc.stdout).lower()
     if answer not in ("yes", "no"):
-        raise JudgeError(f"judge answered neither yes nor no: {proc.stdout.strip()[:200]!r}")
+        raise JudgeError(
+            f"judge answered neither yes nor no: {proc.stdout.strip()[:200]!r}"
+        )
     return answer
 
 
@@ -289,18 +325,6 @@ def start_transport(config, run=subprocess.run):
     raise HarnessError("fallback transport failed its preflight")
 
 
-def is_refusal(row):
-    return row.output.strip().startswith("! printf")
-
-
-def refusal_prefix(expected):
-    if "Cannot generate a safe command:" in expected:
-        return "Cannot generate a safe command:"
-    if "Clarify:" in expected:
-        return "Clarify:"
-    return None
-
-
 VERIFIER_TEMPLATE = """#!/bin/bash
 set -u
 mkdir -p /logs/verifier
@@ -320,6 +344,9 @@ fi
 
 TASK_TOML = """schema_version = "1.4"
 
+[task]
+name = "askk/__ID__"
+
 [verifier]
 timeout_sec = 120.0
 
@@ -333,25 +360,30 @@ build_timeout_sec = 600.0
 
 
 def verifier_script(row):
-    prefix = refusal_prefix(row.output) if is_refusal(row) else ""
-    return VERIFIER_TEMPLATE.replace("__PREFIX__", shlex.quote(prefix or ""))
+    prefix = EXPECT_PREFIX[row.expect]
+    return VERIFIER_TEMPLATE.replace("__PREFIX__", shlex.quote(prefix))
 
 
-def build_task_dir(workspace, row, fixture, command):
-    task_dir = os.path.join(workspace, f"row-{row.index}")
+def build_task_dir(workspace, row, command):
+    task_dir = os.path.join(workspace, row.id)
     os.makedirs(os.path.join(task_dir, "environment"), exist_ok=True)
     os.makedirs(os.path.join(task_dir, "tests"), exist_ok=True)
     with open(os.path.join(task_dir, "task.toml"), "w", encoding="utf-8") as handle:
-        handle.write(TASK_TOML)
-    with open(os.path.join(task_dir, "instruction.md"), "w", encoding="utf-8") as handle:
+        handle.write(TASK_TOML.replace("__ID__", row.id))
+    with open(
+        os.path.join(task_dir, "instruction.md"), "w", encoding="utf-8"
+    ) as handle:
         handle.write(row.input + "\n")
     dockerfile = "FROM ubuntu:24.04\nWORKDIR /app\n"
-    setup = (fixture or {}).get("setup")
-    if setup:
-        dockerfile += "RUN <<'SETUP'\nset -eu\n" + setup + "\nSETUP\n"
-    with open(os.path.join(task_dir, "environment", "Dockerfile"), "w", encoding="utf-8") as handle:
+    if row.setup:
+        dockerfile += "RUN <<'SETUP'\nset -eu\n" + row.setup + "\nSETUP\n"
+    with open(
+        os.path.join(task_dir, "environment", "Dockerfile"), "w", encoding="utf-8"
+    ) as handle:
         handle.write(dockerfile)
-    with open(os.path.join(task_dir, "tests", "command.txt"), "w", encoding="utf-8") as handle:
+    with open(
+        os.path.join(task_dir, "tests", "command.txt"), "w", encoding="utf-8"
+    ) as handle:
         handle.write(command + "\n")
     test_path = os.path.join(task_dir, "tests", "test.sh")
     with open(test_path, "w", encoding="utf-8") as handle:
@@ -368,29 +400,40 @@ def parse_rewards(jobs_dir, task_names):
         trial = os.path.basename(os.path.dirname(dirpath))
         for name in task_names:
             if trial.startswith(name + "__"):
-                with open(os.path.join(dirpath, "reward.txt"), encoding="utf-8") as handle:
+                with open(
+                    os.path.join(dirpath, "reward.txt"), encoding="utf-8"
+                ) as handle:
                     value = handle.read().strip()
                 found[name] = "yes" if value in ("1", "1.0") else "no"
     return {name: found.get(name, "error") for name in task_names}
 
 
 def run_sandbox(config, jobs):
-    fixtures = load_fixtures(config.fixtures_path)
     workspace = tempfile.mkdtemp(prefix="askk-eval-")
     tasks_dir = os.path.join(workspace, "tasks")
     jobs_dir = os.path.join(workspace, "jobs")
     for row, command in jobs:
-        build_task_dir(tasks_dir, row, fixtures.get(row.input), command)
+        build_task_dir(tasks_dir, row, command)
     cmd = [
-        "harbor", "run", "-p", tasks_dir, "--agent", "nop",
-        "--n-concurrent", str(config.workers), "-o", jobs_dir,
-        "--job-name", "askk-eval", "--yes",
+        "harbor",
+        "run",
+        "-p",
+        tasks_dir,
+        "--agent",
+        "nop",
+        "--n-concurrent",
+        str(config.workers),
+        "-o",
+        jobs_dir,
+        "--job-name",
+        "askk-eval",
+        "--yes",
     ]
     try:
         subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"warning: harbor failed: {error}", file=sys.stderr)
-    names = {f"row-{row.index}": row.index for row, _command in jobs}
+    names = {row.id: row.index for row, _command in jobs}
     rewards = parse_rewards(jobs_dir, list(names))
     return {names[name]: rewards[name] for name in names}
 
@@ -415,7 +458,7 @@ def compute_exit(passed, total, errors, min_pass_rate):
 
 def write_results(results_dir, table):
     os.makedirs(results_dir, exist_ok=True)
-    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     path = os.path.join(results_dir, f"{stamp}.json")
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(table, handle, indent=2)
@@ -429,7 +472,7 @@ def render_report(table, repeat=1):
         generated = item["generated"] or ""
         if len(generated) > 80:
             generated = generated[:77] + "..."
-        label = item["category"]
+        label = item["id"]
         if repeat > 1:
             label = f"{label} [{item['repeat'] + 1}/{repeat}]"
         lines.append(
@@ -456,7 +499,7 @@ def render_report(table, repeat=1):
     for index in sorted({item["index"] for item in table}):
         runs = [item for item in table if item["index"] == index]
         if len(runs) > 1 and all(item["final"] == "no" for item in runs):
-            bugs.append(runs[0]["input"])
+            bugs.append(f"{runs[0]['id']}: {runs[0]['input']}")
     if bugs:
         lines.append("candidate dataset bugs (failed every repeat, no errors):")
         lines.extend(f"  {bug}" for bug in bugs)
@@ -489,6 +532,7 @@ def run(config):
                 raw = calls[row.index]
                 record = {
                     "index": row.index,
+                    "id": row.id,
                     "repeat": repeat_index,
                     "category": row.category,
                     "input": row.input,
@@ -501,12 +545,20 @@ def run(config):
                     "error": None,
                 }
                 if isinstance(raw, AgentError):
-                    record.update(match="error", sandbox="error", judge="error", final="error", error=str(raw))
+                    record.update(
+                        match="error",
+                        sandbox="error",
+                        judge="error",
+                        final="error",
+                        error=str(raw),
+                    )
                 else:
                     generated = extract_command(raw)
                     if generated is not None:
                         record["generated"] = generated
-                        record["match"] = "yes" if exact_match(generated, row.output) else "no"
+                        record["match"] = (
+                            "yes" if exact_match(generated, row.output) else "no"
+                        )
                 records.append((record, row))
             sandbox_jobs = [
                 (row, record["generated"])
@@ -525,14 +577,22 @@ def run(config):
                 and record["match"] != "yes"
                 and record["sandbox"] not in ("yes", "error")
             ]
-            judged = run_judge(config, judge_jobs) if (config.judge_enabled and judge_jobs) else {}
+            judged = (
+                run_judge(config, judge_jobs)
+                if (config.judge_enabled and judge_jobs)
+                else {}
+            )
             for record, _row in records:
                 if record["final"] == "error" or record["generated"] is None:
                     continue
                 if config.judge_enabled and record["index"] in judged:
                     verdict = judged[record["index"]]
-                    record["judge"] = "error" if isinstance(verdict, JudgeError) else verdict
-                record["final"] = score_row(record["match"], record["sandbox"], record["judge"])
+                    record["judge"] = (
+                        "error" if isinstance(verdict, JudgeError) else verdict
+                    )
+                record["final"] = score_row(
+                    record["match"], record["sandbox"], record["judge"]
+                )
             table.extend(record for record, _row in records)
     finally:
         stop_server(server)
@@ -544,6 +604,7 @@ def run(config):
     errors = sum(1 for item in table if item["final"] == "error")
     return compute_exit(passed, len(scored), errors, config.min_pass_rate)
 
+
 EXAMPLES_HEADER = """# Example requests
 
 One hundred natural-language requests and the one-line Bash command the agent should return.
@@ -551,6 +612,8 @@ One hundred natural-language requests and the one-line Bash command the agent sh
 Grounded in `docs/agent-spec.md` and `.opencode/agents/bash.md`. Devin Desktop Terminal Command is the UX analog: natural language in the terminal (`Cmd`/`Ctrl+I`) yields CLI syntax, then the user reviews before run ([Command overview](https://docs.devin.ai/desktop/command/windsurf-overview), [Terminal](https://docs.devin.ai/desktop/terminal.md)). Categories follow public NL-to-shell tools (Copilot CLI `suggest`, Warp AI Command Search): files, find, git, docker, processes, jq/text, systemd, curl, tar/rsync, failed-command repair, and refuse-or-clarify.
 
 Format matches the agent prompt: Input, then Output. Each output is one syntactically complete Bash line: no fences, no preamble, no here-document.
+
+Id is the Harbor task name for the example. Setup, when present, prepares the sandbox before the command runs. Expect, when present, says the command must exit 1 with a `Clarify:` (clarify) or `Cannot generate a safe command:` (refuse) message. Without Expect, the command must exit 0.
 
 """
 
@@ -570,7 +633,12 @@ def render_examples_md(rows):
         if row.category != category:
             category = row.category
             parts.append(f"## {category}\n\n")
-        parts.append(f"Input: {row.input}\nOutput: {row.output}\n\n")
+        parts.append(f"Id: {row.id}\nInput: {row.input}\nOutput: {row.output}\n")
+        if row.setup:
+            parts.append(f"Setup: {row.setup}\n")
+        if row.expect != "exit0":
+            parts.append(f"Expect: {row.expect}\n")
+        parts.append("\n")
     text = "".join(parts)
     return text[:-1] if text.endswith("\n\n") else text
 
@@ -592,7 +660,31 @@ def main(argv=None):
         path = os.path.join(os.path.dirname(config.dataset_path), "examples.md")
         print(f"wrote {write_examples_md(rows, path)}")
         return 0
+    if config.build_tasks or config.reference:
+        try:
+            rows = load_rows(config)
+        except (OSError, ValueError) as error:
+            print(f"error: cannot load dataset: {error}", file=sys.stderr)
+            return 2
+        if config.build_tasks:
+            for row in rows:
+                build_task_dir(config.build_tasks, row, row.output)
+            print(f"wrote {len(rows)} tasks to {config.build_tasks}")
+            return 0
+        return run_reference(config, rows)
     return run(config)
+
+
+def run_reference(config, rows):
+    """Run each expected command in its task. A failure is a dataset or setup bug."""
+    rewards = run_sandbox(config, [(row, row.output) for row in rows])
+    failed = [row for row in rows if rewards[row.index] != "yes"]
+    for row in failed:
+        print(f"{rewards[row.index]}: {row.id} | {row.output}")
+    print(f"reference: {len(rows) - len(failed)}/{len(rows)} tasks pass")
+    if any(rewards[row.index] == "error" for row in rows):
+        return 2
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

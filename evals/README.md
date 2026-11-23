@@ -20,6 +20,14 @@ The runner checks the judge configuration, runs a preflight with `--workers` par
 
 A run that stops before the first agent call writes no results file. A run where every row is an error prints no pass rate.
 
+## Examples and Harbor tasks
+
+Each entry in `docs/examples.json` becomes one Harbor task:
+
+- `id` is the task directory name and the task name `askk/<id>`. It has 1 to 32 characters from `a-z`, `0-9`, and `-`, because Harbor cuts trial names at 32 characters. The report and the results file show the id.
+- `setup` is an optional shell script. The Dockerfile of the task runs it, so the sandbox has the files that the command needs.
+- `expect` is optional. Without it, the command must exit 0. With `clarify` or `refuse`, the command must exit 1 and print `Clarify:` or `Cannot generate a safe command:` to stderr.
+
 ## Environment variables
 
 - `ASKK_MODEL` is the agent model. The default is `claude-agent/system.ai.claude-haiku-5-5`, the same default as `askk.sh`. Set it when your provider does not serve that model.
@@ -29,13 +37,14 @@ A run that stops before the first agent call writes no results file. A run where
 ## Flags
 
 - `--dataset PATH` reads another dataset. The default is `docs/examples.json`.
-- `--fixtures PATH` reads another fixture map. The default is `evals/fixtures.json`.
 - `--results-dir PATH` writes the results file elsewhere. The default is `evals/results`.
 - `--workers N` sets the agent and Harbor concurrency. The default is 8.
 - `--repeat N` runs every example N times. The default is 1.
 - `--min-pass-rate R` sets the pass threshold. The default is 1.0.
 - `--smoke` runs only the first five examples.
 - `--no-judge` turns the judge off. The judge model is not needed then.
+- `--build-tasks DIR` writes one Harbor task directory per example to `DIR` and exits 0. Each task holds the expected command, so you can read every task before a run, or run them with `harbor run -p DIR --agent nop`.
+- `--reference` runs the expected command of every example in Harbor and prints each task that does not pass. Use it after you change an example or its setup. It exits 0 when all tasks pass, 1 when a task fails, and 2 when Harbor gives no reward.
 - `--render-docs` regenerates `docs/examples.md` from `docs/examples.json` and exits 0. Do not edit `docs/examples.md` by hand.
 
 ## Exit statuses

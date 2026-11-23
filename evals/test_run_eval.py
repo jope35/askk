@@ -47,6 +47,28 @@ class ConfigTest(unittest.TestCase):
         rows = run_eval.load_dataset("docs/examples.json")
         self.assertEqual(len(rows), 100)
         self.assertEqual(rows[0].input, "List all files in this folder")
+        self.assertEqual(rows[0].id, "fs-list-files-folder")
+        self.assertEqual(sum(1 for row in rows if row.setup), 52)
+
+    def test_load_dataset_rejects_bad_rows(self):
+        cases = [
+            [{"category": "A", "input": "a", "output": "ls"}],
+            [{"id": "Bad Id", "category": "A", "input": "a", "output": "ls"}],
+            [{"id": "x" * 33, "category": "A", "input": "a", "output": "ls"}],
+            [
+                {"id": "same", "category": "A", "input": "a", "output": "ls"},
+                {"id": "same", "category": "A", "input": "b", "output": "ls"},
+            ],
+            [{"id": "a", "category": "A", "input": "a", "output": "ls", "expect": "x"}],
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "rows.json")
+            for data in cases:
+                with self.subTest(data=data):
+                    with open(path, "w", encoding="utf-8") as handle:
+                        json.dump(data, handle)
+                    with self.assertRaises(ValueError):
+                        run_eval.load_dataset(path)
 
 
 class ExtractionTest(unittest.TestCase):
@@ -76,7 +98,11 @@ class ExtractionTest(unittest.TestCase):
                 result = run_eval.select_command(sample)
                 self.assertIsNotNone(result)
                 proc = subprocess.run(
-                    ["awk", program], input=sample, text=True, capture_output=True, check=True
+                    ["awk", program],
+                    input=sample,
+                    text=True,
+                    capture_output=True,
+                    check=True,
                 )
                 self.assertEqual(result.strip(), proc.stdout.strip())
 
@@ -177,28 +203,32 @@ class SandboxTest(unittest.TestCase):
     def rows(self):
         return run_eval.load_dataset("docs/examples.json")
 
-    def test_is_refusal_and_prefix(self):
-        rows = self.rows()
-        refusals = [row for row in rows if run_eval.is_refusal(row)]
-        self.assertEqual(len(refusals), 3)
-        self.assertEqual(run_eval.refusal_prefix(refusals[0].output), "Cannot generate a safe command:")
-        self.assertEqual(run_eval.refusal_prefix(refusals[1].output), "Clarify:")
-        self.assertEqual(run_eval.refusal_prefix(refusals[2].output), "Cannot generate a safe command:")
-        normal = next(row for row in rows if not run_eval.is_refusal(row))
-        self.assertFalse(run_eval.is_refusal(normal))
-        self.assertIsNone(run_eval.refusal_prefix(normal.output))
+    def test_expect_matches_refusal_outputs(self):
+        for row in self.rows():
+            with self.subTest(id=row.id):
+                prefix = run_eval.EXPECT_PREFIX[row.expect]
+                if row.output.startswith("! printf"):
+                    self.assertTrue(prefix)
+                    self.assertIn(prefix, row.output)
+                else:
+                    self.assertEqual(row.expect, "exit0")
 
     def test_build_task_dir(self):
-        row = run_eval.Row(7, "Files", "List the files", "ls -la")
-        path = run_eval.build_task_dir(self.tmp.name, row, {"setup": "mkdir -p work"}, "ls -la")
-        self.assertTrue(os.path.isdir(path))
+        row = run_eval.Row(
+            7, "Files", "List the files", "ls -la", "fs-list", "mkdir -p work"
+        )
+        path = run_eval.build_task_dir(self.tmp.name, row, "ls -la")
+        self.assertEqual(os.path.basename(path), "fs-list")
         task_toml = open(os.path.join(path, "task.toml"), encoding="utf-8").read()
+        self.assertIn('name = "askk/fs-list"', task_toml)
         self.assertIn('network_mode = "no-network"', task_toml)
         self.assertEqual(
             open(os.path.join(path, "instruction.md"), encoding="utf-8").read(),
             "List the files\n",
         )
-        dockerfile = open(os.path.join(path, "environment", "Dockerfile"), encoding="utf-8").read()
+        dockerfile = open(
+            os.path.join(path, "environment", "Dockerfile"), encoding="utf-8"
+        ).read()
         self.assertIn("mkdir -p work", dockerfile)
         self.assertEqual(
             open(os.path.join(path, "tests", "command.txt"), encoding="utf-8").read(),
@@ -210,17 +240,21 @@ class SandboxTest(unittest.TestCase):
 
     def test_parse_rewards(self):
         jobs = os.path.join(self.tmp.name, "jobs")
-        for name, reward in (("row-0__abc", "1"), ("row-1__def", "0")):
+        for name, reward in (("a__abc", "1"), ("a-b__def", "0")):
             path = os.path.join(jobs, "stamp", name, "verifier")
             os.makedirs(path)
-            with open(os.path.join(path, "reward.txt"), "w", encoding="utf-8") as handle:
+            with open(
+                os.path.join(path, "reward.txt"), "w", encoding="utf-8"
+            ) as handle:
                 handle.write(reward)
-        result = run_eval.parse_rewards(jobs, ["row-0", "row-1", "row-2"])
-        self.assertEqual(result, {"row-0": "yes", "row-1": "no", "row-2": "error"})
+        result = run_eval.parse_rewards(jobs, ["a", "a-b", "c"])
+        self.assertEqual(result, {"a": "yes", "a-b": "no", "c": "error"})
 
     def test_verifier_script_branches(self):
         normal = run_eval.Row(0, "c", "a", "true")
-        refusal = run_eval.Row(1, "c", "b", "! printf 'Clarify: %s\\n' 'Which path?' >&2")
+        refusal = run_eval.Row(
+            1, "c", "b", "! printf 'Clarify: %s\\n' 'Which path?' >&2", expect="clarify"
+        )
         normal_script = run_eval.verifier_script(normal)
         refusal_script = run_eval.verifier_script(refusal)
         self.assertIn("/logs/verifier/reward.txt", normal_script)
@@ -248,8 +282,12 @@ class JudgeTest(unittest.TestCase):
         def no(cmd, **kwargs):
             return subprocess.CompletedProcess(cmd, 0, "no\n", "")
 
-        self.assertEqual(run_eval.judge_row(self.config(), self.row(), "ls", run=yes), "yes")
-        self.assertEqual(run_eval.judge_row(self.config(), self.row(), "ls", run=no), "no")
+        self.assertEqual(
+            run_eval.judge_row(self.config(), self.row(), "ls", run=yes), "yes"
+        )
+        self.assertEqual(
+            run_eval.judge_row(self.config(), self.row(), "ls", run=no), "no"
+        )
 
     def test_judge_rejects_prose(self):
         def prose(cmd, **kwargs):
@@ -300,9 +338,18 @@ class JudgeTest(unittest.TestCase):
 class ScoringTest(unittest.TestCase):
     def item(self, **changes):
         item = {
-            "index": 0, "repeat": 0, "category": "Git", "input": "show status",
-            "output": "git status", "generated": "git status --short", "match": "no",
-            "sandbox": "no", "judge": "yes", "final": "yes", "error": None,
+            "index": 0,
+            "id": "git-status",
+            "repeat": 0,
+            "category": "Git",
+            "input": "show status",
+            "output": "git status",
+            "generated": "git status --short",
+            "match": "no",
+            "sandbox": "no",
+            "judge": "yes",
+            "final": "yes",
+            "error": None,
         }
         item.update(changes)
         return item
@@ -324,7 +371,7 @@ class ScoringTest(unittest.TestCase):
     def test_render_report(self):
         table = [self.item(generated="x" * 100)]
         report = run_eval.render_report(table, 1)
-        self.assertIn("Git", report)
+        self.assertIn("git-status", report)
         self.assertIn("match=no", report)
         self.assertIn("exec=no", report)
         self.assertIn("judge=yes", report)
@@ -344,11 +391,17 @@ class ScoringTest(unittest.TestCase):
     def test_candidate_dataset_bugs(self):
         table = []
         for repeat in range(3):
-            table.append(self.item(index=0, repeat=repeat, input="bad row", final="no"))
-            table.append(self.item(index=1, repeat=repeat, input="error row", final="error"))
+            table.append(
+                self.item(index=0, id="bad", repeat=repeat, input="bad row", final="no")
+            )
+            table.append(
+                self.item(
+                    index=1, id="err", repeat=repeat, input="error row", final="error"
+                )
+            )
         report = run_eval.render_report(table, 3)
         section = report.split("candidate dataset bugs", 1)[1]
-        self.assertIn("bad row", section)
+        self.assertIn("bad: bad row", section)
         self.assertNotIn("error row", section)
 
     def test_write_results_name(self):
@@ -370,8 +423,13 @@ class MainTest(unittest.TestCase):
 
     def test_preflight_failure_writes_no_results(self):
         with tempfile.TemporaryDirectory() as directory:
-            with mock.patch.dict(os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False):
-                with mock.patch("run_eval.start_transport", side_effect=run_eval.HarnessError("no transport")):
+            with mock.patch.dict(
+                os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False
+            ):
+                with mock.patch(
+                    "run_eval.start_transport",
+                    side_effect=run_eval.HarnessError("no transport"),
+                ):
                     code = run_eval.main(["--results-dir", directory])
             self.assertEqual(code, 2)
             self.assertEqual(os.listdir(directory), [])
@@ -382,18 +440,32 @@ class MainTest(unittest.TestCase):
             with open(dataset, "w", encoding="utf-8") as handle:
                 json.dump(
                     [
-                        {"category": "A", "input": "first", "output": "ls"},
-                        {"category": "A", "input": "second", "output": "pwd"},
+                        {"id": "a", "category": "A", "input": "first", "output": "ls"},
+                        {
+                            "id": "b",
+                            "category": "A",
+                            "input": "second",
+                            "output": "pwd",
+                        },
                     ],
                     handle,
                 )
             results = os.path.join(directory, "results")
-            with mock.patch.dict(os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False):
+            with mock.patch.dict(
+                os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False
+            ):
                 with mock.patch("run_eval.start_transport", return_value=None):
-                    with mock.patch("run_eval.run_agent_calls", return_value={0: "ls\n", 1: "echo hi\n"}):
-                        with mock.patch("run_eval.run_sandbox", return_value={0: "no", 1: "yes"}):
+                    with mock.patch(
+                        "run_eval.run_agent_calls",
+                        return_value={0: "ls\n", 1: "echo hi\n"},
+                    ):
+                        with mock.patch(
+                            "run_eval.run_sandbox", return_value={0: "no", 1: "yes"}
+                        ):
                             with mock.patch("run_eval.run_judge", return_value={}):
-                                code = run_eval.main(["--dataset", dataset, "--results-dir", results])
+                                code = run_eval.main(
+                                    ["--dataset", dataset, "--results-dir", results]
+                                )
             self.assertEqual(code, 0)
             files = os.listdir(results)
             self.assertEqual(len(files), 1)
@@ -405,18 +477,61 @@ class MainTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             dataset = os.path.join(directory, "rows.json")
             with open(dataset, "w", encoding="utf-8") as handle:
-                json.dump([{"category": "A", "input": "first", "output": "ls"}], handle)
+                json.dump(
+                    [{"id": "a", "category": "A", "input": "first", "output": "ls"}],
+                    handle,
+                )
             results = os.path.join(directory, "results")
-            with mock.patch.dict(os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False):
+            with mock.patch.dict(
+                os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False
+            ):
                 with mock.patch("run_eval.start_transport", return_value=None):
-                    with mock.patch("run_eval.run_agent_calls", return_value={0: run_eval.AgentError("boom")}):
-                        code = run_eval.main(["--dataset", dataset, "--results-dir", results])
+                    with mock.patch(
+                        "run_eval.run_agent_calls",
+                        return_value={0: run_eval.AgentError("boom")},
+                    ):
+                        code = run_eval.main(
+                            ["--dataset", dataset, "--results-dir", results]
+                        )
             self.assertEqual(code, 2)
+
+
+class TaskFlagsTest(unittest.TestCase):
+    def test_build_tasks_writes_reference_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(run_eval.main(["--build-tasks", directory]), 0)
+            rows = run_eval.load_dataset("docs/examples.json")
+            self.assertEqual(sorted(os.listdir(directory)), sorted(r.id for r in rows))
+            command = open(
+                os.path.join(directory, rows[0].id, "tests", "command.txt"),
+                encoding="utf-8",
+            ).read()
+            self.assertEqual(command, rows[0].output + "\n")
+
+    def test_reference_reports_failures(self):
+        def fake(config, jobs):
+            return {row.index: ("no" if row.index == 1 else "yes") for row, _ in jobs}
+
+        with mock.patch("run_eval.run_sandbox", side_effect=fake) as sandbox:
+            code = run_eval.main(["--reference", "--smoke"])
+        self.assertEqual(code, 1)
+        jobs = sandbox.call_args.args[1]
+        self.assertEqual(
+            [command for row, command in jobs], [r.output for r, _ in jobs]
+        )
+
+        with mock.patch(
+            "run_eval.run_sandbox",
+            side_effect=lambda c, j: {r.index: "error" for r, _ in j},
+        ):
+            self.assertEqual(run_eval.main(["--reference", "--smoke"]), 2)
 
 
 class DocsTest(unittest.TestCase):
     def test_smoke_truncates(self):
-        with mock.patch.dict(os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False):
+        with mock.patch.dict(
+            os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False
+        ):
             config = run_eval.parse_args(["--smoke"])
             rows = run_eval.load_rows(config)
         self.assertEqual(len(rows), 5)
