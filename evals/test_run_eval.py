@@ -236,67 +236,6 @@ class SandboxTest(unittest.TestCase):
 
 class JudgeTest(unittest.TestCase):
     def config(self):
-        return run_eval.Config(judge_model="provider/judge")
-
-    def test_judge_yes_and_no(self):
-        for answer, expected in (("Yes\n", "yes"), ("no\n", "no"), (" YES ", "yes")):
-            with self.subTest(answer=answer):
-                def fake_run(cmd, **kwargs):
-                    return subprocess.CompletedProcess(cmd, 0, answer, "")
-
-                row = run_eval.Row(0, "c", "request", "expected")
-                self.assertEqual(run_eval.judge_row(self.config(), row, "generated", fake_run), expected)
-
-    def test_judge_rejects_prose_and_errors(self):
-        def prose(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, "The command looks fine.\n", "")
-
-        def timeout(cmd, **kwargs):
-            raise subprocess.TimeoutExpired(cmd, 30)
-
-        def broken(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 1, "", "rate limit")
-
-        row = run_eval.Row(0, "c", "request", "expected")
-        for fake_run in (prose, timeout, broken):
-            with self.subTest(fake_run=fake_run):
-                with self.assertRaises(run_eval.JudgeError):
-                    run_eval.judge_row(self.config(), row, "generated", fake_run)
-
-    def test_judge_prompt_and_command(self):
-        seen = {}
-
-        def fake_run(cmd, **kwargs):
-            seen["cmd"] = cmd
-            seen["timeout"] = kwargs["timeout"]
-            return subprocess.CompletedProcess(cmd, 0, "yes", "")
-
-        row = run_eval.Row(0, "c", "list files", "ls -la")
-        run_eval.judge_row(self.config(), row, "ls -a", fake_run)
-        prompt = seen["cmd"][-1]
-        self.assertIn("list files", prompt)
-        self.assertIn("ls -la", prompt)
-        self.assertIn("ls -a", prompt)
-        self.assertIn("--model", seen["cmd"])
-        self.assertIn("provider/judge", seen["cmd"])
-        self.assertNotIn("--agent", seen["cmd"])
-        self.assertEqual(seen["timeout"], 30)
-
-    def test_run_judge_maps(self):
-        rows = [
-            (run_eval.Row(0, "c", "a", "x"), "x"),
-            (run_eval.Row(1, "c", "b", "y"), "z"),
-        ]
-
-        def fake_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, "yes", "")
-
-        result = run_eval.run_judge(self.config(), rows, run=fake_run)
-        self.assertEqual(result, {0: "yes", 1: "yes"})
-
-
-class JudgeTest(unittest.TestCase):
-    def config(self):
         return run_eval.Config(model="provider/agent", judge_model="provider/judge")
 
     def row(self):
@@ -356,6 +295,123 @@ class JudgeTest(unittest.TestCase):
         result = run_eval.run_judge(self.config(), rows, run=fake)
         self.assertEqual(result[0], "yes")
         self.assertIsInstance(result[1], run_eval.JudgeError)
+
+
+class ScoringTest(unittest.TestCase):
+    def item(self, **changes):
+        item = {
+            "index": 0, "repeat": 0, "category": "Git", "input": "show status",
+            "output": "git status", "generated": "git status --short", "match": "no",
+            "sandbox": "no", "judge": "yes", "final": "yes", "error": None,
+        }
+        item.update(changes)
+        return item
+
+    def test_score_row(self):
+        self.assertEqual(run_eval.score_row("yes", "no", "no"), "yes")
+        self.assertEqual(run_eval.score_row("no", "yes", "no"), "yes")
+        self.assertEqual(run_eval.score_row("no", "no", "yes"), "yes")
+        self.assertEqual(run_eval.score_row("no", "no", "no"), "no")
+        self.assertEqual(run_eval.score_row("no", "error", "no"), "error")
+        self.assertEqual(run_eval.score_row("yes", "error", "no"), "yes")
+
+    def test_compute_exit(self):
+        self.assertEqual(run_eval.compute_exit(10, 10, 0, 1.0), 0)
+        self.assertEqual(run_eval.compute_exit(9, 10, 0, 1.0), 1)
+        self.assertEqual(run_eval.compute_exit(10, 10, 1, 1.0), 2)
+        self.assertEqual(run_eval.compute_exit(5, 10, 1, 0.0), 2)
+
+    def test_render_report(self):
+        table = [self.item(generated="x" * 100)]
+        report = run_eval.render_report(table, 1)
+        self.assertIn("Git", report)
+        self.assertIn("match=no", report)
+        self.assertIn("exec=no", report)
+        self.assertIn("judge=yes", report)
+        self.assertIn("final=yes", report)
+        self.assertIn("git status", report)
+        self.assertIn("x" * 77 + "...", report)
+        self.assertNotIn("x" * 81, report)
+        self.assertIn("pass rate: 1/1", report)
+        self.assertIn("  Git: 1/1", report)
+
+    def test_render_report_all_errors(self):
+        report = run_eval.render_report([self.item(final="error", error="boom")], 1)
+        self.assertNotIn("pass rate:", report)
+        self.assertIn("every row is an error", report)
+        self.assertNotIn("pass rate:", report)
+
+    def test_candidate_dataset_bugs(self):
+        table = []
+        for repeat in range(3):
+            table.append(self.item(index=0, repeat=repeat, input="bad row", final="no"))
+            table.append(self.item(index=1, repeat=repeat, input="error row", final="error"))
+        report = run_eval.render_report(table, 3)
+        section = report.split("candidate dataset bugs", 1)[1]
+        self.assertIn("bad row", section)
+        self.assertNotIn("error row", section)
+
+    def test_write_results_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            table = [self.item()]
+            path = run_eval.write_results(directory, table)
+            self.assertRegex(os.path.basename(path), r"^\d{8}T\d{6}Z\.json$")
+            with open(path, encoding="utf-8") as handle:
+                self.assertEqual(json.load(handle), table)
+
+
+class MainTest(unittest.TestCase):
+    def test_judge_config_error_writes_no_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.dict(os.environ, {"ASKK_JUDGE_MODEL": ""}, clear=False):
+                code = run_eval.main(["--results-dir", directory])
+            self.assertEqual(code, 2)
+            self.assertEqual(os.listdir(directory), [])
+
+    def test_preflight_failure_writes_no_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.dict(os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False):
+                with mock.patch("run_eval.start_transport", side_effect=run_eval.HarnessError("no transport")):
+                    code = run_eval.main(["--results-dir", directory])
+            self.assertEqual(code, 2)
+            self.assertEqual(os.listdir(directory), [])
+
+    def test_complete_run_writes_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = os.path.join(directory, "rows.json")
+            with open(dataset, "w", encoding="utf-8") as handle:
+                json.dump(
+                    [
+                        {"category": "A", "input": "first", "output": "ls"},
+                        {"category": "A", "input": "second", "output": "pwd"},
+                    ],
+                    handle,
+                )
+            results = os.path.join(directory, "results")
+            with mock.patch.dict(os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False):
+                with mock.patch("run_eval.start_transport", return_value=None):
+                    with mock.patch("run_eval.run_agent_calls", return_value={0: "ls\n", 1: "echo hi\n"}):
+                        with mock.patch("run_eval.run_sandbox", return_value={0: "no", 1: "yes"}):
+                            with mock.patch("run_eval.run_judge", return_value={}):
+                                code = run_eval.main(["--dataset", dataset, "--results-dir", results])
+            self.assertEqual(code, 0)
+            files = os.listdir(results)
+            self.assertEqual(len(files), 1)
+            table = json.load(open(os.path.join(results, files[0]), encoding="utf-8"))
+            self.assertEqual([item["final"] for item in table], ["yes", "yes"])
+            self.assertEqual({item["match"] for item in table}, {"yes", "no"})
+
+    def test_any_error_exits_2(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = os.path.join(directory, "rows.json")
+            with open(dataset, "w", encoding="utf-8") as handle:
+                json.dump([{"category": "A", "input": "first", "output": "ls"}], handle)
+            results = os.path.join(directory, "results")
+            with mock.patch.dict(os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False):
+                with mock.patch("run_eval.start_transport", return_value=None):
+                    with mock.patch("run_eval.run_agent_calls", return_value={0: run_eval.AgentError("boom")}):
+                        code = run_eval.main(["--dataset", dataset, "--results-dir", results])
+            self.assertEqual(code, 2)
 
 
 if __name__ == "__main__":

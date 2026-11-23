@@ -8,6 +8,7 @@ miss both exact match and the sandbox.
 
 import argparse
 import concurrent.futures
+import datetime
 import dataclasses
 import json
 import os
@@ -573,16 +574,185 @@ def run_judge(config, jobs, run=subprocess.run):
         return dict(pool.map(one, jobs))
 
 
-def main(argv=None):
-    config = parse_args(sys.argv[1:] if argv is None else argv)
+def score_row(match, sandbox, judge):
+    if "yes" in (match, sandbox, judge):
+        return "yes"
+    if "error" in (match, sandbox, judge):
+        return "error"
+    return "no"
+
+
+def compute_exit(passed, total, errors, min_pass_rate):
+    if errors:
+        return 2
+    if total == 0:
+        return 2
+    if passed / total < min_pass_rate:
+        return 1
+    return 0
+
+
+def write_results(results_dir, table):
+    os.makedirs(results_dir, exist_ok=True)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = os.path.join(results_dir, f"{stamp}.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(table, handle, indent=2)
+        handle.write("\n")
+    return path
+
+
+def render_report(table, repeat=1):
+    lines = []
+    for item in table:
+        generated = item["generated"] or ""
+        if len(generated) > 80:
+            generated = generated[:77] + "..."
+        label = item["category"]
+        if repeat > 1:
+            label = f"{label} [{item['repeat'] + 1}/{repeat}]"
+        lines.append(
+            f"{label} | match={item['match']} exec={item['sandbox']} "
+            f"judge={item['judge']} final={item['final']} | "
+            f"expected: {item['output']} | generated: {generated}"
+        )
+    scored = [item for item in table if item["final"] != "error"]
+    lines.append("")
+    if scored:
+        passed = sum(1 for item in scored if item["final"] == "yes")
+        lines.append(f"pass rate: {passed}/{len(scored)} = {passed / len(scored):.1%}")
+        categories = {}
+        for item in scored:
+            counts = categories.setdefault(item["category"], [0, 0])
+            counts[0] += item["final"] == "yes"
+            counts[1] += 1
+        for category in sorted(categories):
+            yes, total = categories[category]
+            lines.append(f"  {category}: {yes}/{total} = {yes / total:.1%}")
+    else:
+        lines.append("every row is an error; no rate printed")
+    bugs = []
+    for index in sorted({item["index"] for item in table}):
+        runs = [item for item in table if item["index"] == index]
+        if len(runs) > 1 and all(item["final"] == "no" for item in runs):
+            bugs.append(runs[0]["input"])
+    if bugs:
+        lines.append("candidate dataset bugs (failed every repeat, no errors):")
+        lines.extend(f"  {bug}" for bug in bugs)
+    return "\n".join(lines)
+
+
+def run(config):
     try:
         validate_judge_config(config)
     except HarnessError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
+    try:
+        rows = load_dataset(config.dataset_path)
+    except (OSError, ValueError) as error:
+        print(f"error: cannot load dataset: {error}", file=sys.stderr)
+        return 2
+    if config.smoke:
+        rows = rows[:5]
+    server = None
+    try:
+        server = start_transport(config)
+    except HarnessError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    try:
+        table = []
+        for repeat_index in range(config.repeat):
+            calls = run_agent_calls(config, rows)
+            work = {}
+            for row in rows:
+                raw = calls[row.index]
+                if isinstance(raw, AgentError):
+                    work[row.index] = (None, "no")
+                    table.append(
+                        {
+                            "index": row.index,
+                            "repeat": repeat_index,
+                            "category": row.category,
+                            "input": row.input,
+                            "output": row.output,
+                            "generated": None,
+                            "match": "error",
+                            "sandbox": "error",
+                            "judge": "error",
+                            "final": "error",
+                            "error": str(raw),
+                        }
+                    )
+                    continue
+                generated = extract_command(raw)
+                if generated is None:
+                    work[row.index] = (None, "no")
+                    continue
+                work[row.index] = (generated, "yes" if exact_match(generated, row.output) else "no")
+            sandbox_jobs = [
+                (row, work[row.index][0])
+                for row in rows
+                if work.get(row.index) and work[row.index][0] is not None
+            ]
+            sandbox = run_sandbox(config, sandbox_jobs) if sandbox_jobs else {}
+            judge_jobs = [
+                (row, work[row.index][0])
+                for row in rows
+                if work.get(row.index)
+                and work[row.index][0] is not None
+                and work[row.index][1] != "yes"
+                and sandbox.get(row.index) != "yes"
+                and sandbox.get(row.index) != "error"
+            ]
+            judged = run_judge(config, judge_jobs) if (config.judge_enabled and judge_jobs) else {}
+            for row in rows:
+                if any(
+                    item["index"] == row.index and item["repeat"] == repeat_index
+                    for item in table
+                ):
+                    continue
+                generated, match = work.get(row.index, (None, "no"))
+                execution = sandbox.get(row.index, "no") if generated is not None else "no"
+                verdict = "no"
+                if config.judge_enabled and row.index in judged:
+                    result = judged[row.index]
+                    verdict = "error" if isinstance(result, JudgeError) else result
+                elif isinstance(judged.get(row.index), JudgeError):
+                    verdict = "error"
+                final = score_row(match, execution, verdict)
+                table.append(
+                    {
+                        "index": row.index,
+                        "repeat": repeat_index,
+                        "category": row.category,
+                        "input": row.input,
+                        "output": row.output,
+                        "generated": generated,
+                        "match": match,
+                        "sandbox": execution,
+                        "judge": verdict,
+                        "final": final,
+                        "error": None,
+                    }
+                )
+    finally:
+        stop_server(server)
+    print(render_report(table, config.repeat))
+    path = write_results(config.results_dir, table)
+    print(f"results: {path}")
+    scored = [item for item in table if item["final"] != "error"]
+    passed = sum(1 for item in scored if item["final"] == "yes")
+    errors = sum(1 for item in table if item["final"] == "error")
+    return compute_exit(passed, len(scored), errors, config.min_pass_rate)
+
+
+def main(argv=None):
+    config = parse_args(sys.argv[1:] if argv is None else argv)
     if config.render_docs:
         return 0
-    return 2
+    return run(config)
 
 
 if __name__ == "__main__":
