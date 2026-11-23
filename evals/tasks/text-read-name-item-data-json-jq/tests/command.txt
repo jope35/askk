@@ -1,0 +1,1 @@
+jq -r '.items[].name' data.json

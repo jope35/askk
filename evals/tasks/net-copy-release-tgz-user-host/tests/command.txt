@@ -1,0 +1,1 @@
+scp ./release.tgz user@host:tmp/

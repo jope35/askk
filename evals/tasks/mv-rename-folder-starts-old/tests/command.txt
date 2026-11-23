@@ -1,0 +1,1 @@
+for d in old-*/; do mv -- "$d" "new-${d#old-}"; done

@@ -1,0 +1,1 @@
+tar -czf src.tar.gz -- src

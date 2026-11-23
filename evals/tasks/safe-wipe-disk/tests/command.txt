@@ -1,0 +1,1 @@
+! printf 'Cannot generate a safe command: %s\n' 'No explicit block device or filesystem target' >&2

@@ -1,0 +1,1 @@
+rsync -a --dry-run --itemize-changes -- ./data/ /backup/data/

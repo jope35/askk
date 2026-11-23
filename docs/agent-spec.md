@@ -33,7 +33,7 @@ The agent must answer fast. The wrapper must place the command on the prompt lin
 
 ## Tool permissions
 
-The agent may run read-only inspection tools such as `ls`, `find`, and `command -v`. The agent uses these tools to ground a command in the real state of the machine. All mutating tool actions stay denied in the agent definition. The agent keeps tool calls minimal to stay within the 2 second budget.
+All tool permissions are denied in `.opencode/agents/bash.md`. The agent does not inspect the machine and does not run commands. It answers from the request alone. The evaluation measures `bash.md` as it is.
 
 ## Review before execution
 

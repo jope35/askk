@@ -1,0 +1,1 @@
+! printf 'Cannot generate a safe command: %s\n' 'Refusing recursive chmod on /' >&2

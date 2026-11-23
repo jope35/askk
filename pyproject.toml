@@ -1,0 +1,20 @@
+[project]
+name = "askk"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "jope35", email = "15650945+jope35@users.noreply.github.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "pre-commit>=4.7.0",
+    "ruff>=0.17.6",
+]
+
+[project.scripts]
+askk = "askk:main"
+
+[build-system]
+requires = ["uv_build>=0.13.9,<0.14.0"]
+build-backend = "uv_build"

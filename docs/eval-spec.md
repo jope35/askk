@@ -23,7 +23,7 @@ The harness has two legs: text comparison and sandbox execution. Harbor runs the
 
 The open choice was the text leg.
 
-1. A standard-library-only runner (chosen). The runner loads the dataset with `json.load`, compares text with plain functions, prints the report, and writes one JSON results file per run. It adds no dependency.
+1. A standard-library-only runner (chosen). The runner loads the dataset with `json.load`, compares text with plain functions, prints the report, and writes one results folder per run. It adds no dependency.
 2. MLflow GenAI evaluation. Not chosen. MLflow supplies dataset handling, scorer dispatch, and run storage, but the runner needs each of those in a few lines, and MLflow is the one heavyweight dependency in the design. It also carries a version risk: `mlflow.genai.evaluate` must accept rows that already contain `outputs` and must run scorers without a predict function. Its `Equivalence` judge is replaced by one `opencode run` call to the judge model.
 3. No judge. Not chosen. Many correct commands differ from the expected text in quoting or flag order, so the pass rate would read lower than the agent deserves.
 
@@ -32,15 +32,14 @@ The open choice was the text leg.
 ### Files
 
 - `evals/run_eval.py` is the runner. It uses the standard library only. It loads `docs/examples.json`, runs the agent calls in parallel, scores every result, prints a report, writes a results file, and exits with a status code.
-- `evals/fixtures.json` maps each example to its sandbox fixture, if it needs one.
-- `evals/results/` receives one JSON file per run, named with the UTC timestamp of the run.
+- `evals/results/` receives one folder per run, named with the UTC timestamp of the run. The folder holds `results.json`, the tasks that ran in `tasks/r<N>/`, and the Harbor output in `jobs/r<N>/`.
 - `evals/test_run_eval.py` holds unit tests for the extraction and the exact match scorer.
 
 There is no `requirements.txt`: the runner needs no package beyond the standard library.
 
 ### Dataset
 
-The runner reads `docs/examples.json` as it is. Each row is one evaluation row: `input` holds the request, `output` holds the expected Bash command, and `category` groups the report. `docs/examples.md` is a rendered copy of the same data. Generate `docs/examples.md` from `docs/examples.json`. Do not edit `docs/examples.md` by hand.
+The runner reads `docs/examples.json` as it is. Each row is one evaluation row: `id` names its Harbor task, `input` holds the request, `output` holds the expected Bash command, and `category` groups the report. The optional `setup` and `expect` fields describe the sandbox and the verifier rule. `docs/examples.md` is a rendered copy of the same data. Generate `docs/examples.md` from `docs/examples.json`. Do not edit `docs/examples.md` by hand.
 
 ### Running the agent
 
@@ -52,7 +51,7 @@ opencode run --agent bash --model MODEL REQUEST
 
 The model comes from the `ASKK_MODEL` environment variable, default `claude-agent/system.ai.claude-haiku-5-5`, the same default as `askk.sh`. Each call gets a timeout of 30 seconds. The 2 second budget in `docs/agent-spec.md` applies to interactive use only.
 
-Before the run, the runner makes `--workers` parallel calls with the request `Show git status`. This preflight catches a shared lock, a port conflict, or missing credentials before the dataset runs. If any call fails, the runner prints the failure and switches to the fallback transport: one `opencode serve` process plus `opencode run --attach URL` for every worker. The run exits with status 2 only when the fallback also fails or cannot start.
+Before the run, the runner makes `--workers` parallel calls with the request `Show git status`. This preflight catches a shared lock, a port conflict, or missing credentials before the dataset runs. If any call fails, the runner prints the failure and switches to the fallback transport: one `opencode serve` process plus `opencode run --server URL` for every worker. The run exits with status 2 only when the fallback also fails or cannot start.
 
 The OpenCode docs do not prove that parallel `opencode run` calls are safe, because the CLI can use one shared background server and one shared database. The fallback exists for that risk.
 
@@ -64,7 +63,9 @@ Each scored command comes from exactly one agent call on the host. The runner ne
 
 Each example runs as one Harbor task. The runner writes the task directory: `instruction.md` holds the request, `environment/` holds a container with the fixture the command needs, and `tests/` runs the generated command and writes a reward to the verifier log. The verifier writes reward 1 when the command exits 0, and reward 0 otherwise. Harbor runs the tasks in parallel with `--n-concurrent`.
 
-A row gets a fixture only when its command needs machine state, for example `/var/log/nginx`, `./src`, or a git repository. A fixture must make the expected command exit 0. Every row without a fixture, refusal or not, runs in a bare container. The fixture map lives in `evals/fixtures.json`, keyed by the example's `input`, so the harness and the docs stay in one place.
+`evals/tasks/` holds a committed, generated copy of every task, and a unit test keeps it in step with `docs/examples.json`.
+
+A row gets a fixture only when its command needs machine state, for example `/var/log/nginx`, `./src`, or a git repository. The fixture is the `setup` field of the row in `docs/examples.json`. A fixture must make the expected command pass, and `run_eval.py --reference` makes sure that it does. Every row without a fixture, refusal or not, runs in a bare container. The `id` field of the row names its task directory and its Harbor task. The `expect` field selects the verifier rule.
 
 Refusal rows are the exception to the exit 0 rule. The runner marks a row as a refusal row when its expected command starts with `! printf`. Those commands exit 1 by design, with a diagnostic on stderr. For a refusal row the verifier writes reward 1 when the command exits 1 and stderr starts with the diagnostic prefix from the row's expected command, `Cannot generate a safe command:` or `Clarify:`.
 
@@ -104,7 +105,7 @@ A configuration or preflight failure stops the run before scoring. Agent, sandbo
 
 ### Report
 
-The runner prints one line per example: category, the match, execution, and judge columns, the final yes or no, the expected command, and the generated command truncated to 80 characters. It then prints the pass rate overall and one pass rate per category. It writes the full result table, every column included, to `evals/results/TIMESTAMP.json`. A run that stops before the first agent call writes no results file.
+The runner prints one line per example: category, the match, execution, and judge columns, the final yes or no, the expected command, and the generated command truncated to 80 characters. It then prints the pass rate overall and one pass rate per category. It writes the full result table, every column included, to `evals/results/TIMESTAMP/results.json`. The same folder holds the tasks that ran in `tasks/r<N>/` and the Harbor output in `jobs/r<N>/`, so `harbor view evals/results/TIMESTAMP/jobs` shows the trials of the run. A run that stops before the first agent call writes no run folder.
 
 The `--repeat N` flag runs each example N times, default 1. Each run counts as one row in the pass rate. The report shows the fraction of runs that pass for each example. Because the dataset is not verified, the report also lists rows that fail in every repeat as candidate dataset bugs, separate from agent failures. A row that errors in every repeat is an error row, not a candidate dataset bug.
 
@@ -121,7 +122,7 @@ The unit tests cover the command extraction and the exact match scorer. A smoke 
 ## Left to the builder
 
 - Confirm that a Harbor task can skip its agent phase, or run a no-op agent, when `tests/` already runs the injected command. If Harbor requires an agent inside the container, run the agent there once instead, read the generated command from the task log, and drop the host-side agent calls.
-- Spike the parallel `opencode run` question before the full build: run the preflight by hand and record whether the shared server or database serializes or fails the calls. Also confirm that `opencode serve` and `opencode run --attach URL` work as the fallback needs, because the docs do not prove the flags.
+- Spike the parallel `opencode run` question before the full build: run the preflight by hand and record whether the shared server or database serializes or fails the calls. Also confirm that `opencode serve` and `opencode run --server URL` work as the fallback needs, because the docs do not prove the flags.
 - `askk.sh` implements only extraction steps 1 and 2. It lacks the multi-line reject and the `bash -n` check that `docs/agent-spec.md` specifies. Add both, or the wrapper and the runner accept different outputs.
 - `docs/agent-spec.md` says the agent may run read-only inspection tools, but `.opencode/agents/bash.md` denies every tool. Resolve the contradiction. The eval measures `bash.md` as it is.
 - Decide whether sandbox tasks have internet access. The network examples fetch from public hosts, which is flaky in a repeatable run. Serve their fixtures locally, or let the judge decide those rows.

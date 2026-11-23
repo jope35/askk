@@ -1,0 +1,1 @@
+find "$HOME" -type f -size +100M

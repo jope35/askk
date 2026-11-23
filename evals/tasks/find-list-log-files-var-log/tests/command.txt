@@ -1,0 +1,1 @@
+find /var/log -type f -name '*.log' -mtime -1 -printf '%s\t%p\n' | sort -nr
