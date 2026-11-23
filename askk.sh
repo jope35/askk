@@ -37,6 +37,18 @@ ask() {
     return 1
   fi
 
+  case "$cmd" in
+    *$'\n'*)
+      echo "Command spans more than one line." >&2
+      return 1
+      ;;
+  esac
+
+  if ! printf '%s' "$cmd" | bash -n 2>/dev/null; then
+    echo "Command has a syntax error." >&2
+    return 1
+  fi
+
   _askk_copy "$cmd" && printf '\033[2m(copied to clipboard)\033[0m\n' >&2
 
   if [ -n "$ZSH_VERSION" ]; then
