@@ -23,7 +23,12 @@ def call(cmd):
         return ("timeout", time.monotonic() - start, "", "")
     elapsed = time.monotonic() - start
     if proc.returncode != 0:
-        return (f"exit {proc.returncode}", elapsed, proc.stdout.strip()[:200], proc.stderr.strip()[:200])
+        return (
+            f"exit {proc.returncode}",
+            elapsed,
+            proc.stdout.strip()[:200],
+            proc.stderr.strip()[:200],
+        )
     return ("ok", elapsed, proc.stdout.strip()[:200], "")
 
 
@@ -49,7 +54,9 @@ def report(label, results):
     for i, (status, elapsed, out, err) in enumerate(results):
         print(f"  call {i}: {status} in {elapsed:.1f}s out={out!r} err={err!r}")
     ok = all(r[0] == "ok" for r in results)
-    print(f"{label}: {'PASS' if ok else 'FAIL'} ({sum(1 for r in results if r[0] == 'ok')}/{len(results)} ok)")
+    print(
+        f"{label}: {'PASS' if ok else 'FAIL'} ({sum(1 for r in results if r[0] == 'ok')}/{len(results)} ok)"
+    )
     return ok
 
 
@@ -61,20 +68,35 @@ def main():
     model = os.environ.get("ASKK_MODEL", DEFAULT_MODEL)
 
     base = ["opencode", "run", "--agent", "bash", "--model", model, REQUEST]
-    print(f"phase 1: {args.workers} parallel `opencode run` (shared background server), model={model}")
+    print(
+        f"phase 1: {args.workers} parallel `opencode run` (shared background server), model={model}"
+    )
     phase1 = report("phase 1", parallel(lambda i: base, args.workers))
 
-    print(f"phase 2: one `opencode serve` on port {args.port} + `opencode run --server URL` x{args.workers}")
+    print(
+        f"phase 2: one `opencode serve` on port {args.port} + `opencode run --server URL` x{args.workers}"
+    )
     server = subprocess.Popen(
         ["opencode", "serve", "--hostname", "127.0.0.1", "--port", str(args.port)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     try:
         if not wait_for_port(args.port, server):
             print(f"phase 2: FAIL (server did not start, exit={server.poll()})")
             return 1
         url = f"http://127.0.0.1:{args.port}"
-        fallback = ["opencode", "run", "--server", url, "--agent", "bash", "--model", model, REQUEST]
+        fallback = [
+            "opencode",
+            "run",
+            "--server",
+            url,
+            "--agent",
+            "bash",
+            "--model",
+            model,
+            REQUEST,
+        ]
         phase2 = report("phase 2", parallel(lambda i: fallback, args.workers))
     finally:
         server.terminate()

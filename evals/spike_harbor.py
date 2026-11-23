@@ -6,7 +6,6 @@ one harbor job, and prints the rewards it finds. Findings go to
 docs/eval-spikes.md. Standard library only."""
 
 import argparse
-import json
 import os
 import shutil
 import subprocess
@@ -87,10 +86,16 @@ def main():
     jobs_dir = args.jobs_dir or os.path.join(root, "jobs")
 
     cmd = [
-        "harbor", "run", "-p", tasks_dir,
-        "--agent", "nop",
-        "-n", str(len(CASES)),
-        "-o", jobs_dir,
+        "harbor",
+        "run",
+        "-p",
+        tasks_dir,
+        "--agent",
+        "nop",
+        "-n",
+        str(len(CASES)),
+        "-o",
+        jobs_dir,
         "--yes",
     ]
     print("run:", " ".join(cmd))
