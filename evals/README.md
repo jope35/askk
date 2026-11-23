@@ -28,6 +28,15 @@ Each entry in `docs/examples.json` becomes one Harbor task:
 - `setup` is an optional shell script. The Dockerfile of the task runs it, so the sandbox has the files that the command needs.
 - `expect` is optional. Without it, the command must exit 0. With `clarify` or `refuse`, the command must exit 1 and print `Clarify:` or `Cannot generate a safe command:` to stderr.
 
+The repository commits the generated tasks in `evals/tasks/`. After you change `docs/examples.json`, run both commands, because each call handles one flag:
+
+```bash
+python3 evals/run_eval.py --build-tasks
+python3 evals/run_eval.py --render-docs
+```
+
+A unit test fails when `evals/tasks/` does not match `docs/examples.json`. `harbor view --tasks evals/tasks` browses the definitions, and `harbor task start-env evals/tasks/<id>` opens a shell in one task's container.
+
 ## Environment variables
 
 - `ASKK_MODEL` is the agent model. The default is `claude-agent/system.ai.claude-haiku-5-5`, the same default as `askk.sh`. Set it when your provider does not serve that model.
@@ -43,7 +52,7 @@ Each entry in `docs/examples.json` becomes one Harbor task:
 - `--min-pass-rate R` sets the pass threshold. The default is 1.0.
 - `--smoke` runs only the first five examples.
 - `--no-judge` turns the judge off. The judge model is not needed then.
-- `--build-tasks DIR` writes one Harbor task directory per example to `DIR` and exits 0. Each task holds the expected command, so you can read every task before a run, or run them with `harbor run -p DIR --agent nop`.
+- `--build-tasks [DIR]` writes one Harbor task directory per example to `DIR` and exits 0. The default is `evals/tasks`. Each task holds the expected command, so you can read every task before a run, or run them with `harbor run -p DIR --agent nop`. The flag replaces every task folder in `DIR`, and it refuses a folder that holds anything else, with exit status 2. It ignores `--smoke` and always writes every example.
 - `--reference` runs the expected command of every example in Harbor and prints each task that does not pass. Use it after you change an example or its setup. It exits 0 when all tasks pass, 1 when a task fails, and 2 when Harbor gives no reward.
 - `--render-docs` regenerates `docs/examples.md` from `docs/examples.json` and exits 0. Do not edit `docs/examples.md` by hand.
 

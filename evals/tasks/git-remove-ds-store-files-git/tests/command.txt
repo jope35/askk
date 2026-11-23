@@ -1,0 +1,1 @@
+git ls-files -z -- '.DS_Store' '**/.DS_Store' | xargs -0 -r git rm --cached --

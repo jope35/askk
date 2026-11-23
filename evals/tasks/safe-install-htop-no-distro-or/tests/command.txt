@@ -1,0 +1,1 @@
+if [ -e /etc/os-release ]; then cat /etc/os-release; else cat /usr/lib/os-release; fi; command -v apt-get dnf yum zypper pacman apk

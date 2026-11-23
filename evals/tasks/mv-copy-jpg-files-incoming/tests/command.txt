@@ -1,0 +1,1 @@
+find ./incoming -maxdepth 1 -type f -name '*.jpg' -exec cp -t ./photos -- {} +

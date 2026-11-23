@@ -1,0 +1,1 @@
+git log --since='1 week ago' --pretty=format:'%h %an %s'

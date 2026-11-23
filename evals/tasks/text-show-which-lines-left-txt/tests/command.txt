@@ -1,0 +1,1 @@
+comm -23 <(sort -- left.txt) <(sort -- right.txt)

@@ -1,0 +1,1 @@
+docker cp api:/var/log/app.log ./app.log

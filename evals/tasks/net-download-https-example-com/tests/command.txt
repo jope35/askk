@@ -1,0 +1,1 @@
+curl --fail --location -o file.tar.gz -- https://example.com/file.tar.gz

@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -23,6 +24,7 @@ import time
 DEFAULT_MODEL = "claude-agent/system.ai.claude-haiku-5-5"
 DEFAULT_DATASET = "docs/examples.json"
 DEFAULT_RESULTS = "evals/results"
+DEFAULT_TASKS = "evals/tasks"
 
 
 class HarnessError(Exception):
@@ -85,7 +87,7 @@ def parse_args(argv):
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--no-judge", action="store_true")
     parser.add_argument("--render-docs", action="store_true")
-    parser.add_argument("--build-tasks", metavar="DIR")
+    parser.add_argument("--build-tasks", nargs="?", const=DEFAULT_TASKS, metavar="DIR")
     parser.add_argument("--reference", action="store_true")
     args = parser.parse_args(argv)
     return Config(
@@ -392,6 +394,27 @@ def build_task_dir(workspace, row, command):
     return task_dir
 
 
+def write_tasks(tasks_dir, rows):
+    """Write one task folder per row and drop every other task folder."""
+    if os.path.isdir(tasks_dir):
+        entries = os.listdir(tasks_dir)
+        foreign = [
+            name
+            for name in entries
+            if not os.path.isfile(os.path.join(tasks_dir, name, "task.toml"))
+        ]
+        if foreign:
+            raise HarnessError(
+                f"{tasks_dir} holds entries that are not task folders: "
+                + ", ".join(sorted(foreign))
+            )
+        for name in entries:
+            shutil.rmtree(os.path.join(tasks_dir, name))
+    os.makedirs(tasks_dir, exist_ok=True)
+    for row in rows:
+        build_task_dir(tasks_dir, row, row.output)
+
+
 def parse_rewards(jobs_dir, task_names):
     found = {}
     for dirpath, _dirnames, filenames in os.walk(jobs_dir):
@@ -661,16 +684,25 @@ def main(argv=None):
         print(f"wrote {write_examples_md(rows, path)}")
         return 0
     if config.build_tasks or config.reference:
+        if config.build_tasks:
+            # --smoke only shortens an eval run, never the committed task folder.
+            try:
+                rows = load_dataset(config.dataset_path)
+            except (OSError, ValueError) as error:
+                print(f"error: cannot load dataset: {error}", file=sys.stderr)
+                return 2
+            try:
+                write_tasks(config.build_tasks, rows)
+            except HarnessError as error:
+                print(f"error: {error}", file=sys.stderr)
+                return 2
+            print(f"wrote {len(rows)} tasks to {config.build_tasks}")
+            return 0
         try:
             rows = load_rows(config)
         except (OSError, ValueError) as error:
             print(f"error: cannot load dataset: {error}", file=sys.stderr)
             return 2
-        if config.build_tasks:
-            for row in rows:
-                build_task_dir(config.build_tasks, row, row.output)
-            print(f"wrote {len(rows)} tasks to {config.build_tasks}")
-            return 0
         return run_reference(config, rows)
     return run(config)
 

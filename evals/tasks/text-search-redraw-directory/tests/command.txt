@@ -1,0 +1,1 @@
+grep -F -- 'redraw' ./* | awk '{print $1, $3}' | sort

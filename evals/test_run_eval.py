@@ -10,6 +10,20 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import run_eval
 
 
+def snapshot(path):
+    """Map every file under path to its bytes and its executable bit."""
+    tree = {}
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for name in filenames:
+            full = os.path.join(dirpath, name)
+            with open(full, "rb") as handle:
+                tree[os.path.relpath(full, path)] = (
+                    handle.read(),
+                    os.access(full, os.X_OK),
+                )
+    return tree
+
+
 class ConfigTest(unittest.TestCase):
     def test_parse_args_defaults(self):
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -497,6 +511,57 @@ class MainTest(unittest.TestCase):
 
 
 class TaskFlagsTest(unittest.TestCase):
+    def rows(self):
+        return [
+            run_eval.Row(0, "c", "first request", "ls", "a"),
+            run_eval.Row(1, "c", "second request", "pwd", "b"),
+        ]
+
+    def test_committed_tasks_match_dataset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_eval.write_tasks(directory, run_eval.load_dataset("docs/examples.json"))
+            self.assertEqual(
+                snapshot(directory),
+                snapshot("evals/tasks"),
+                "evals/tasks is stale; run: python3 evals/run_eval.py --build-tasks",
+            )
+
+    def test_build_tasks_default_dir(self):
+        self.assertEqual(
+            run_eval.parse_args(["--build-tasks"]).build_tasks, "evals/tasks"
+        )
+        self.assertIsNone(run_eval.parse_args([]).build_tasks)
+
+    def test_write_tasks_removes_stale_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_eval.write_tasks(directory, self.rows())
+            self.assertEqual(sorted(os.listdir(directory)), ["a", "b"])
+            run_eval.write_tasks(directory, self.rows()[:1])
+            self.assertEqual(os.listdir(directory), ["a"])
+
+    def test_write_tasks_refuses_foreign_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            keep = os.path.join(directory, "keep.txt")
+            with open(keep, "w", encoding="utf-8") as handle:
+                handle.write("keep")
+            with self.assertRaises(run_eval.HarnessError):
+                run_eval.write_tasks(directory, self.rows())
+            self.assertTrue(os.path.exists(keep))
+            self.assertEqual(run_eval.main(["--build-tasks", directory]), 2)
+            self.assertTrue(os.path.exists(keep))
+
+        with tempfile.TemporaryDirectory() as directory:
+            src = os.path.join(directory, "src")
+            os.makedirs(src)
+            with self.assertRaises(run_eval.HarnessError):
+                run_eval.write_tasks(directory, self.rows())
+            self.assertTrue(os.path.isdir(src))
+
+    def test_build_tasks_ignores_smoke(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(run_eval.main(["--build-tasks", directory, "--smoke"]), 0)
+            self.assertEqual(len(os.listdir(directory)), 100)
+
     def test_build_tasks_writes_reference_tasks(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual(run_eval.main(["--build-tasks", directory]), 0)

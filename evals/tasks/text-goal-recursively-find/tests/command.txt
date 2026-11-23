@@ -1,0 +1,1 @@
+grep -R -F -- 'error[42]' ./logs
