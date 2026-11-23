@@ -426,8 +426,11 @@ def parse_rewards(jobs_dir, task_names):
                     os.path.join(dirpath, "reward.txt"), encoding="utf-8"
                 ) as handle:
                     value = handle.read().strip()
-                found[name] = "yes" if value in ("1", "1.0") else "no"
-    return {name: found.get(name, "error") for name in task_names}
+                found[name] = (
+                    "yes" if value in ("1", "1.0") else "no",
+                    os.path.relpath(os.path.dirname(dirpath), jobs_dir),
+                )
+    return {name: found.get(name, ("error", None)) for name in task_names}
 
 
 def run_sandbox(config, jobs, run_dir, repeat_index):
@@ -456,7 +459,10 @@ def run_sandbox(config, jobs, run_dir, repeat_index):
         print(f"warning: harbor failed: {error}", file=sys.stderr)
     names = {row.id: row.index for row, _command in jobs}
     rewards = parse_rewards(jobs_dir, list(names))
-    return {names[name]: rewards[name] for name in names}
+    return {
+        names[name]: (state, os.path.join("jobs", trial) if trial else None)
+        for name, (state, trial) in rewards.items()
+    }
 
 
 def score_row(match, sandbox, judge):
@@ -509,11 +515,14 @@ def render_report(table, repeat=1):
         label = item["id"]
         if repeat > 1:
             label = f"{label} [{item['repeat'] + 1}/{repeat}]"
-        lines.append(
+        line = (
             f"{label} | match={item['match']} exec={item['sandbox']} "
             f"judge={item['judge']} final={item['final']} | "
             f"expected: {item['output']} | generated: {generated}"
         )
+        if item["final"] != "yes" and item.get("trial"):
+            line += f" | trial: {item['trial']}"
+        lines.append(line)
     scored = [item for item in table if item["final"] != "error"]
     lines.append("")
     if scored:
@@ -578,6 +587,7 @@ def run(config):
                     "judge": "no",
                     "final": "no",
                     "error": None,
+                    "trial": None,
                 }
                 if isinstance(raw, AgentError):
                     record.update(
@@ -608,7 +618,9 @@ def run(config):
             for record, _row in records:
                 if record["final"] == "error" or record["generated"] is None:
                     continue
-                record["sandbox"] = sandbox.get(record["index"], "error")
+                record["sandbox"], record["trial"] = sandbox.get(
+                    record["index"], ("error", None)
+                )
             judge_jobs = [
                 (row, record["generated"])
                 for record, row in records
@@ -728,18 +740,27 @@ def run_reference(config, rows):
     """Run each expected command in its task. A failure is a dataset or setup bug."""
     run_dir = make_run_dir(config.results_dir, "-reference")
     rewards = run_sandbox(config, [(row, row.output) for row in rows], run_dir, 0)
-    failed = [row for row in rows if rewards[row.index] != "yes"]
+    failed = [row for row in rows if rewards[row.index][0] != "yes"]
     for row in failed:
-        print(f"{rewards[row.index]}: {row.id} | {row.output}")
+        state, trial = rewards[row.index]
+        line = f"{state}: {row.id} | {row.output}"
+        if trial:
+            line += f" | trial: {trial}"
+        print(line)
     print(f"reference: {len(rows) - len(failed)}/{len(rows)} tasks pass")
     table = [
-        {"id": row.id, "output": row.output, "sandbox": rewards[row.index]}
+        {
+            "id": row.id,
+            "output": row.output,
+            "sandbox": rewards[row.index][0],
+            "trial": rewards[row.index][1],
+        }
         for row in rows
     ]
     path = write_results(run_dir, table)
     print(f"results: {path}")
     print(f"browse: harbor view {os.path.join(run_dir, 'jobs')}")
-    if any(rewards[row.index] == "error" for row in rows):
+    if any(rewards[row.index][0] == "error" for row in rows):
         return 2
     return 1 if failed else 0
 

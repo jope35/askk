@@ -263,7 +263,14 @@ class SandboxTest(unittest.TestCase):
             ) as handle:
                 handle.write(reward)
         result = run_eval.parse_rewards(jobs, ["a", "a-b", "c"])
-        self.assertEqual(result, {"a": "yes", "a-b": "no", "c": "error"})
+        self.assertEqual(
+            result,
+            {
+                "a": ("yes", os.path.join("stamp", "a__abc")),
+                "a-b": ("no", os.path.join("stamp", "a-b__def")),
+                "c": ("error", None),
+            },
+        )
 
     def test_run_sandbox_persists(self):
         row = run_eval.Row(0, "c", "list the files", "ls", "a")
@@ -382,6 +389,7 @@ class ScoringTest(unittest.TestCase):
             "judge": "yes",
             "final": "yes",
             "error": None,
+            "trial": None,
         }
         item.update(changes)
         return item
@@ -419,6 +427,18 @@ class ScoringTest(unittest.TestCase):
         self.assertNotIn("pass rate:", report)
         self.assertIn("every row is an error", report)
         self.assertNotIn("pass rate:", report)
+
+    def test_render_report_shows_trial_for_failures(self):
+        failed = run_eval.render_report(
+            [self.item(final="no", trial="jobs/r0/x__1")], 1
+        )
+        self.assertIn("trial: jobs/r0/x__1", failed)
+        passed = run_eval.render_report(
+            [self.item(final="yes", trial="jobs/r0/y__1")], 1
+        )
+        self.assertNotIn("y__1", passed)
+        error = run_eval.render_report([self.item(final="error", trial=None)], 1)
+        self.assertNotIn("trial:", error)
 
     def test_candidate_dataset_bugs(self):
         table = []
@@ -509,8 +529,8 @@ class MainTest(unittest.TestCase):
                         with mock.patch(
                             "run_eval.run_sandbox",
                             side_effect=lambda config, jobs, run_dir, repeat_index: {
-                                0: "no",
-                                1: "yes",
+                                0: ("no", "jobs/r0/a__1"),
+                                1: ("yes", "jobs/r0/b__1"),
                             },
                         ):
                             with mock.patch("run_eval.run_judge", return_value={}):
@@ -528,6 +548,10 @@ class MainTest(unittest.TestCase):
                 table = json.load(handle)
             self.assertEqual([item["final"] for item in table], ["yes", "yes"])
             self.assertEqual({item["match"] for item in table}, {"yes", "no"})
+            self.assertEqual(
+                [item["trial"] for item in table],
+                ["jobs/r0/a__1", "jobs/r0/b__1"],
+            )
 
     def test_any_error_exits_2(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -550,6 +574,12 @@ class MainTest(unittest.TestCase):
                             ["--dataset", dataset, "--results-dir", results]
                         )
             self.assertEqual(code, 2)
+            run_dir = os.path.join(results, os.listdir(results)[0])
+            with open(
+                os.path.join(run_dir, "results.json"), encoding="utf-8"
+            ) as handle:
+                table = json.load(handle)
+            self.assertIsNone(table[0]["trial"])
 
 
 class TaskFlagsTest(unittest.TestCase):
@@ -617,7 +647,13 @@ class TaskFlagsTest(unittest.TestCase):
 
     def test_reference_reports_failures(self):
         def fake(config, jobs, run_dir, repeat_index):
-            return {row.index: ("no" if row.index == 1 else "yes") for row, _ in jobs}
+            return {
+                row.index: (
+                    "no" if row.index == 1 else "yes",
+                    f"jobs/r{repeat_index}/x",
+                )
+                for row, _ in jobs
+            }
 
         with tempfile.TemporaryDirectory() as directory:
             with mock.patch("run_eval.run_sandbox", side_effect=fake) as sandbox:
@@ -635,7 +671,9 @@ class TaskFlagsTest(unittest.TestCase):
 
             with mock.patch(
                 "run_eval.run_sandbox",
-                side_effect=lambda c, j, r, i: {row.index: "error" for row, _ in j},
+                side_effect=lambda c, j, r, i: {
+                    row.index: ("error", None) for row, _ in j
+                },
             ):
                 self.assertEqual(
                     run_eval.main(
