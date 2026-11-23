@@ -26,7 +26,7 @@ DEFAULT_RESULTS = "evals/results"
 
 
 class HarnessError(Exception):
-    """The harness cannot run. maps to exit status 2."""
+    """The harness cannot run. This maps to exit status 2."""
 
 
 class AgentError(Exception):
@@ -167,12 +167,8 @@ def exact_match(generated, expected):
 
 
 def call_agent(config, request, run=subprocess.run):
-    cmd = ["opencode", "run"]
-    if config.server_url:
-        cmd += ["--server", config.server_url]
-    cmd += ["--agent", "bash", "--model", config.model, request]
     try:
-        proc = run(cmd, capture_output=True, text=True, timeout=30)
+        proc = run(agent_command(config, request), capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired as error:
         raise AgentError(f"agent call timed out after 30s: {request}") from error
     except OSError as error:
@@ -597,6 +593,7 @@ def main(argv=None):
         print(f"wrote {write_examples_md(rows, path)}")
         return 0
     return run(config)
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -52,7 +52,7 @@ opencode run --agent bash --model MODEL REQUEST
 
 The model comes from the `ASKK_MODEL` environment variable, default `claude-agent/system.ai.claude-haiku-5-5`, the same default as `askk.sh`. Each call gets a timeout of 30 seconds. The 2 second budget in `docs/agent-spec.md` applies to interactive use only.
 
-Before the run, the runner makes `--workers` parallel calls with the request `Show git status`. This preflight catches a shared lock, a port conflict, or missing credentials before the dataset runs. If any call fails, the runner prints the failure and switches to the fallback transport: one `opencode serve` process plus `opencode run --attach URL` for every worker. The run exits with status 2 only when the fallback also fails or cannot start.
+Before the run, the runner makes `--workers` parallel calls with the request `Show git status`. This preflight catches a shared lock, a port conflict, or missing credentials before the dataset runs. If any call fails, the runner prints the failure and switches to the fallback transport: one `opencode serve` process plus `opencode run --server URL` for every worker. The run exits with status 2 only when the fallback also fails or cannot start.
 
 The OpenCode docs do not prove that parallel `opencode run` calls are safe, because the CLI can use one shared background server and one shared database. The fallback exists for that risk.
 
@@ -121,7 +121,7 @@ The unit tests cover the command extraction and the exact match scorer. A smoke 
 ## Left to the builder
 
 - Confirm that a Harbor task can skip its agent phase, or run a no-op agent, when `tests/` already runs the injected command. If Harbor requires an agent inside the container, run the agent there once instead, read the generated command from the task log, and drop the host-side agent calls.
-- Spike the parallel `opencode run` question before the full build: run the preflight by hand and record whether the shared server or database serializes or fails the calls. Also confirm that `opencode serve` and `opencode run --attach URL` work as the fallback needs, because the docs do not prove the flags.
+- Spike the parallel `opencode run` question before the full build: run the preflight by hand and record whether the shared server or database serializes or fails the calls. Also confirm that `opencode serve` and `opencode run --server URL` work as the fallback needs, because the docs do not prove the flags.
 - `askk.sh` implements only extraction steps 1 and 2. It lacks the multi-line reject and the `bash -n` check that `docs/agent-spec.md` specifies. Add both, or the wrapper and the runner accept different outputs.
 - `docs/agent-spec.md` says the agent may run read-only inspection tools, but `.opencode/agents/bash.md` denies every tool. Resolve the contradiction. The eval measures `bash.md` as it is.
 - Decide whether sandbox tasks have internet access. The network examples fetch from public hosts, which is flaky in a repeatable run. Serve their fixtures locally, or let the judge decide those rows.
