@@ -7,11 +7,14 @@ miss both exact match and the sandbox.
 """
 
 import argparse
+import concurrent.futures
 import dataclasses
 import json
 import os
+import socket
 import subprocess
 import sys
+import time
 
 DEFAULT_MODEL = "claude-agent/system.ai.claude-haiku-5-5"
 DEFAULT_DATASET = "docs/examples.json"
@@ -106,6 +109,106 @@ def validate_judge_config(config):
         raise HarnessError("ASKK_JUDGE_MODEL is not set and the judge is enabled")
     if config.judge_model == config.model:
         raise HarnessError("ASKK_JUDGE_MODEL must differ from ASKK_MODEL")
+
+
+def agent_command(config, request):
+    command = ["opencode", "run"]
+    if config.server_url:
+        command += ["--server", config.server_url]
+    command += ["--agent", "bash", "--model", config.model, request]
+    return command
+
+
+def call_agent(config, request, run=subprocess.run):
+    try:
+        proc = run(
+            agent_command(config, request),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise AgentError(f"agent call timed out: {request!r}") from error
+    if proc.returncode != 0:
+        raise AgentError(
+            f"agent call failed with status {proc.returncode}: {request!r}: "
+            f"{(proc.stderr or '').strip()[:200]}"
+        )
+    return proc.stdout
+
+
+def preflight(config, run=subprocess.run):
+    request = "Show git status"
+
+    def check(_index):
+        try:
+            call_agent(config, request, run)
+            return True
+        except AgentError:
+            return False
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=config.workers) as pool:
+        return all(pool.map(check, range(config.workers)))
+
+
+def run_agent_calls(config, rows, run=subprocess.run):
+    def call(row):
+        try:
+            return row.index, call_agent(config, row.input, run)
+        except AgentError as error:
+            return row.index, error
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=config.workers) as pool:
+        return dict(pool.map(call, rows))
+
+
+def free_port():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def start_server():
+    port = free_port()
+    process = subprocess.Popen(
+        ["opencode", "serve", "--hostname", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise HarnessError("opencode serve exited before it accepted connections")
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return process, f"http://127.0.0.1:{port}"
+        except OSError:
+            time.sleep(0.2)
+    process.terminate()
+    raise HarnessError("opencode serve did not start within 20 seconds")
+
+
+def stop_server(process):
+    if process is None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
+def setup_transport(config):
+    """Return a server process, or None when the direct transport works."""
+    if preflight(config):
+        return None
+    print("preflight failed; falling back to one opencode serve process", file=sys.stderr)
+    process, url = start_server()
+    config.server_url = url
+    if preflight(config):
+        return process
+    stop_server(process)
+    raise HarnessError("preflight failed on both the direct and the server transport")
 
 
 def select_command(raw):

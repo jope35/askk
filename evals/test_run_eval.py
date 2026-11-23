@@ -4,10 +4,11 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import run_eval
 
 
-class ConfigTest(unittest.TestCase):
+class SkeletonTests(unittest.TestCase):
     def test_parse_args_defaults(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             config = run_eval.parse_args([])
@@ -19,13 +20,15 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.dataset_path, "docs/examples.json")
 
     def test_validate_judge_config_unset(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
-            config = run_eval.parse_args([])
+        config = run_eval.parse_args([])
+        config.judge_enabled = True
+        config.judge_model = None
         with self.assertRaises(run_eval.HarnessError):
             run_eval.validate_judge_config(config)
 
     def test_validate_judge_config_same_model(self):
         config = run_eval.parse_args([])
+        config.judge_enabled = True
         config.model = "provider/model"
         config.judge_model = "provider/model"
         with self.assertRaises(run_eval.HarnessError):
@@ -33,7 +36,8 @@ class ConfigTest(unittest.TestCase):
 
     def test_validate_judge_config_ok(self):
         config = run_eval.parse_args([])
-        config.model = "provider/model"
+        config.judge_enabled = True
+        config.model = "provider/agent"
         config.judge_model = "provider/judge"
         run_eval.validate_judge_config(config)
         config.judge_enabled = False
@@ -46,52 +50,137 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(rows[0].input, "List all files in this folder")
 
 
-class ExtractionTest(unittest.TestCase):
-    def test_extract_prefers_first_fenced_block(self):
-        raw = "Here is the command:\n```bash\nls -la\n```\nUse it."
-        self.assertEqual(run_eval.extract_command(raw), "ls -la")
+class TransportTest(unittest.TestCase):
+    def config(self, **changes):
+        config = run_eval.Config(dataset_path="docs/examples.json")
+        for key, value in changes.items():
+            setattr(config, key, value)
+        return config
 
-    def test_extract_falls_back_to_first_non_empty_line(self):
-        self.assertEqual(run_eval.extract_command("\n\npwd\n"), "pwd")
+    def test_call_agent_success(self):
+        def run(cmd, **kwargs):
+            self.assertEqual(cmd[:5], ["opencode", "run", "--agent", "bash", "--model"])
+            self.assertEqual(cmd[-1], "Show git status")
+            self.assertEqual(kwargs["timeout"], 30)
+            return __import__("subprocess").CompletedProcess(cmd, 0, "git status\n", "")
 
-    def test_extract_trims(self):
-        self.assertEqual(run_eval.extract_command("  ls -la  \n"), "ls -la")
+        self.assertEqual(run_eval.call_agent(self.config(), "Show git status", run), "git status\n")
 
-    def test_extract_matches_askk_awk(self):
-        source = open("askk.sh", encoding="utf-8").read()
-        program = source.split("awk '", 1)[1].split("'", 1)[0]
-        samples = [
-            "prose\n```\nls -la\n```\nmore",
-            "\n\npwd\n",
-            "  ls -la  \n",
-            "```\nfind . -name '*.py'\n| sort\n```",
-            "one\ntwo\n",
+    def test_call_agent_timeout(self):
+        def run(cmd, **kwargs):
+            raise __import__("subprocess").TimeoutExpired(cmd, 30)
+
+        with self.assertRaises(run_eval.AgentError):
+            run_eval.call_agent(self.config(), "Show git status", run)
+
+    def test_call_agent_nonzero(self):
+        def run(cmd, **kwargs):
+            return __import__("subprocess").CompletedProcess(cmd, 1, "", "boom")
+
+        with self.assertRaises(run_eval.AgentError):
+            run_eval.call_agent(self.config(), "Show git status", run)
+
+    def test_preflight_all_ok(self):
+        def run(cmd, **kwargs):
+            return __import__("subprocess").CompletedProcess(cmd, 0, "git status\n", "")
+
+        self.assertTrue(run_eval.preflight(self.config(workers=3), run))
+
+    def test_preflight_one_fails(self):
+        calls = {"n": 0}
+
+        def run(cmd, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                return __import__("subprocess").CompletedProcess(cmd, 1, "", "boom")
+            return __import__("subprocess").CompletedProcess(cmd, 0, "git status\n", "")
+
+        self.assertFalse(run_eval.preflight(self.config(workers=3), run))
+
+    def test_run_agent_calls_maps_output_and_error(self):
+        def run(cmd, **kwargs):
+            if cmd[-1] == "bad":
+                return __import__("subprocess").CompletedProcess(cmd, 1, "", "boom")
+            return __import__("subprocess").CompletedProcess(cmd, 0, cmd[-1] + "\n", "")
+
+        rows = [
+            run_eval.Row(0, "a", "one", "one"),
+            run_eval.Row(1, "a", "bad", "bad"),
         ]
-        for sample in samples:
-            with self.subTest(sample=sample):
-                result = run_eval.select_command(sample)
-                self.assertIsNotNone(result)
-                proc = __import__("subprocess").run(
-                    ["awk", program], input=sample, text=True, capture_output=True, check=True
-                )
-                self.assertEqual(result.strip(), proc.stdout.strip())
+        result = run_eval.run_agent_calls(self.config(workers=2), rows, run=run)
+        self.assertEqual(result[(0, 0)], "one\n")
+        self.assertIsInstance(result[(1, 0)], run_eval.AgentError)
 
-    def test_extract_rejects_multiline(self):
-        self.assertIsNone(run_eval.extract_command("```\nls\npwd\n```"))
+    def test_call_agent_uses_server_when_set(self):
+        seen = {}
 
-    def test_extract_rejects_syntax_error(self):
-        self.assertIsNone(run_eval.extract_command("if true; then"))
+        def run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            return __import__("subprocess").CompletedProcess(cmd, 0, "git status\n", "")
 
-    def test_extract_accepts_pipeline(self):
-        self.assertEqual(
-            run_eval.extract_command("find . -name '*.png' | wc -l"),
-            "find . -name '*.png' | wc -l",
-        )
+        config = self.config(server_url="http://127.0.0.1:1234")
+        run_eval.call_agent(config, "Show git status", run)
+        self.assertIn("--server", seen["cmd"])
+        self.assertIn("http://127.0.0.1:1234", seen["cmd"])
+        self.assertNotIn("--attach", seen["cmd"])
 
-    def test_exact_match(self):
-        self.assertTrue(run_eval.exact_match("ls -la", "ls -la"))
-        self.assertFalse(run_eval.exact_match("ls -la", "ls"))
-        self.assertTrue(run_eval.exact_match("  ls -la ", "ls -la\n"))
+
+class TransportTest(unittest.TestCase):
+    def config(self):
+        return run_eval.Config(model="provider/model")
+
+    def test_call_agent_success(self):
+        seen = []
+
+        def fake_run(cmd, **kwargs):
+            seen.append((cmd, kwargs))
+            return __import__("subprocess").CompletedProcess(cmd, 0, "git status\n", "")
+
+        output = run_eval.call_agent(self.config(), "Show git status", run=fake_run)
+        self.assertEqual(output, "git status\n")
+        self.assertEqual(seen[0][0][:2], ["opencode", "run"])
+        self.assertIn("--agent", seen[0][0])
+        self.assertEqual(seen[0][1]["timeout"], 30)
+
+    def test_call_agent_timeout(self):
+        def fake_run(cmd, **kwargs):
+            raise __import__("subprocess").TimeoutExpired(cmd, 30)
+
+        with self.assertRaises(run_eval.AgentError):
+            run_eval.call_agent(self.config(), "Show git status", run=fake_run)
+
+    def test_call_agent_nonzero(self):
+        def fake_run(cmd, **kwargs):
+            return __import__("subprocess").CompletedProcess(cmd, 1, "", "rate limit")
+
+        with self.assertRaises(run_eval.AgentError):
+            run_eval.call_agent(self.config(), "Show git status", run=fake_run)
+
+    def test_preflight(self):
+        def good(cmd, **kwargs):
+            return __import__("subprocess").CompletedProcess(cmd, 0, "git status", "")
+
+        def bad(cmd, **kwargs):
+            return __import__("subprocess").CompletedProcess(cmd, 1, "", "nope")
+
+        self.assertTrue(run_eval.preflight(self.config(), run=good))
+        self.assertFalse(run_eval.preflight(self.config(), run=bad))
+
+    def test_run_agent_calls_maps(self):
+        rows = [
+            run_eval.Row(0, "c", "one", "x"),
+            run_eval.Row(1, "c", "two", "y"),
+        ]
+
+        def fake_run(cmd, **kwargs):
+            request = cmd[-1]
+            if request == "two":
+                raise __import__("subprocess").TimeoutExpired(cmd, 30)
+            return __import__("subprocess").CompletedProcess(cmd, 0, "command", "")
+
+        results = run_eval.run_agent_calls(self.config(), rows, run=fake_run)
+        self.assertEqual(results[0], "command")
+        self.assertIsInstance(results[1], run_eval.AgentError)
 
 
 if __name__ == "__main__":
