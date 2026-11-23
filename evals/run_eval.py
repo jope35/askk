@@ -122,125 +122,6 @@ def agent_command(config, request):
     return command
 
 
-def call_agent(config, request, run=subprocess.run):
-    try:
-        proc = run(
-            agent_command(config, request),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise AgentError(f"agent call timed out: {request!r}") from error
-    if proc.returncode != 0:
-        raise AgentError(
-            f"agent call failed with status {proc.returncode}: {request!r}: "
-            f"{(proc.stderr or '').strip()[:200]}"
-        )
-    return proc.stdout
-
-
-def preflight(config, run=subprocess.run):
-    request = "Show git status"
-
-    def check(_index):
-        try:
-            call_agent(config, request, run)
-            return True
-        except AgentError:
-            return False
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=config.workers) as pool:
-        return all(pool.map(check, range(config.workers)))
-
-
-def run_agent_calls(config, rows, run=subprocess.run):
-    def call(row):
-        try:
-            return row.index, call_agent(config, row.input, run)
-        except AgentError as error:
-            return row.index, error
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=config.workers) as pool:
-        return dict(pool.map(call, rows))
-
-
-def free_port():
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
-JUDGE_PROMPT = """Grade whether the generated Bash command fulfils the request.
-
-Request:
-{request}
-
-Expected command:
-{expected}
-
-Generated command:
-{generated}
-
-The generated command may differ from the expected command in quoting or flag order. Answer only Yes or No.
-"""
-
-
-def judge_prompt(row, generated):
-    return JUDGE_PROMPT.format(request=row.input, expected=row.output, generated=generated)
-
-
-def judge_row(config, row, generated, run=subprocess.run):
-    cmd = ["opencode", "run"]
-    if config.server_url:
-        cmd += ["--server", config.server_url]
-    cmd += ["--model", config.judge_model, judge_prompt(row, generated)]
-    try:
-        proc = run(cmd, capture_output=True, text=True, timeout=30)
-    except subprocess.TimeoutExpired as error:
-        raise JudgeError(f"judge call timed out for {row.input!r}") from error
-    except OSError as error:
-        raise JudgeError(f"judge call failed to start: {error}") from error
-    if proc.returncode != 0:
-        raise JudgeError(f"judge call exited {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
-    answer = select_command(proc.stdout).lower()
-    if answer not in ("yes", "no"):
-        raise JudgeError(f"judge answered neither yes nor no: {proc.stdout.strip()[:200]!r}")
-    return answer
-
-
-def run_judge(config, jobs, run=subprocess.run):
-    def one(job):
-        row, generated = job
-        try:
-            return row.index, judge_row(config, row, generated, run=run)
-        except JudgeError as error:
-            return row.index, error
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=config.workers) as pool:
-        return dict(pool.map(one, jobs))
-
-
-def start_server():
-    port = free_port()
-    process = subprocess.Popen(
-        ["opencode", "serve", "--hostname", "127.0.0.1", "--port", str(port)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise HarnessError("opencode serve exited before it accepted connections")
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=1):
-                return process, f"http://127.0.0.1:{port}"
-        except OSError:
-            time.sleep(0.2)
-    process.terminate()
-    raise HarnessError("opencode serve did not start within 20 seconds")
-
-
 def stop_server(process):
     if process is None:
         return
@@ -249,19 +130,6 @@ def stop_server(process):
         process.wait(timeout=10)
     except subprocess.TimeoutExpired:
         process.kill()
-
-
-def setup_transport(config):
-    """Return a server process, or None when the direct transport works."""
-    if preflight(config):
-        return None
-    print("preflight failed; falling back to one opencode serve process", file=sys.stderr)
-    process, url = start_server()
-    config.server_url = url
-    if preflight(config):
-        return process
-    stop_server(process)
-    raise HarnessError("preflight failed on both the direct and the server transport")
 
 
 def select_command(raw):
@@ -442,7 +310,7 @@ set -u
 mkdir -p /logs/verifier
 cd /app
 cmd="$(cat /tests/command.txt)"
-bash -c "$cmd" >/tmp/askk-stdout 2>/tmp/askk-stderr
+timeout 30 bash -c "$cmd" >/tmp/askk-stdout 2>/tmp/askk-stderr
 rc=$?
 prefix=__PREFIX__
 if [ -n "$prefix" ] && [ "$rc" -eq 1 ] && [ "$(head -c ${#prefix} /tmp/askk-stderr)" = "$prefix" ]; then
@@ -529,49 +397,6 @@ def run_sandbox(config, jobs):
     names = {f"row-{row.index}": row.index for row, _command in jobs}
     rewards = parse_rewards(jobs_dir, list(names))
     return {names[name]: rewards[name] for name in names}
-
-
-def judge_prompt(row, generated):
-    return (
-        "You grade a generated Bash command against a request and an expected command.\n"
-        f"Request:\n{row.input}\n\n"
-        f"Expected command:\n{row.output}\n\n"
-        f"Generated command:\n{generated}\n\n"
-        "Does the generated command do the same job as the expected command? "
-        "Answer only yes or no."
-    )
-
-
-def judge_row(config, row, generated, run=subprocess.run):
-    cmd = ["opencode", "run"]
-    if config.server_url:
-        cmd += ["--server", config.server_url]
-    cmd += ["--model", config.judge_model, judge_prompt(row, generated)]
-    try:
-        proc = run(cmd, capture_output=True, text=True, timeout=30)
-    except subprocess.TimeoutExpired as error:
-        raise JudgeError("judge call timed out after 30s") from error
-    except OSError as error:
-        raise JudgeError(f"judge call failed to start: {error}") from error
-    if proc.returncode != 0:
-        detail = (proc.stderr or "").strip().splitlines()[-1:] or ["no stderr"]
-        raise JudgeError(f"judge call exited {proc.returncode}: {detail[0]}")
-    answer = (select_command(proc.stdout) or "").strip().lower()
-    if answer not in ("yes", "no"):
-        raise JudgeError(f"judge answered neither yes nor no: {proc.stdout.strip()[:80]!r}")
-    return answer
-
-
-def run_judge(config, jobs, run=subprocess.run):
-    def one(job):
-        row, generated = job
-        try:
-            return row.index, judge_row(config, row, generated, run=run)
-        except JudgeError as error:
-            return row.index, error
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=config.workers) as pool:
-        return dict(pool.map(one, jobs))
 
 
 def score_row(match, sandbox, judge):

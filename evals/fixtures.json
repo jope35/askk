@@ -1,1 +1,158 @@
-{}
+{
+  "Goal: list contents of /var/log/nginx. Failed command: ls /var/log/nginx. Error: Permission denied": {
+    "setup": "mkdir -p /var/log/nginx && touch /var/log/nginx/access.log && chmod 700 /var/log/nginx"
+  },
+  "Follow the symlink at ./current and print the real path": {
+    "setup": "mkdir -p target && ln -s /app/target current"
+  },
+  "Find empty files under ./src": {
+    "setup": "mkdir -p src && touch src/empty.txt"
+  },
+  "Find .log files under /var/log modified more than 30 days ago": {
+    "setup": "mkdir -p /var/log && touch -d '40 days ago' /var/log/old.log"
+  },
+  "List all .log files in /var/log modified in the last 24 hours, sorted by size": {
+    "setup": "mkdir -p /var/log && printf 'recent\\n' > /var/log/recent.log && touch /var/log/recent.log"
+  },
+  "Find files with the user executable bit set under ./bin": {
+    "setup": "mkdir -p bin && printf '#!/bin/sh\\n' > bin/run && chmod +x bin/run"
+  },
+  "Find files owned by root in ./data": {
+    "setup": "mkdir -p data && touch data/root.txt"
+  },
+  "Rename each folder that starts with `old-`": {
+    "setup": "mkdir -p old-a old-b"
+  },
+  "Rename file draft.txt to final.txt": {
+    "setup": "printf 'draft\\n' > draft.txt"
+  },
+  "Copy config.yaml to config.yaml.bak": {
+    "setup": "printf 'a: 1\\n' > config.yaml"
+  },
+  "Copy all .jpg files from ./incoming to ./photos": {
+    "setup": "mkdir -p incoming photos && printf 'jpg\\n' > incoming/a.jpg"
+  },
+  "Move every .tmp file in this folder into ./trash": {
+    "setup": "mkdir -p trash && printf 'tmp\\n' > a.tmp"
+  },
+  "Create a symlink named ./app pointing at ./releases/current": {
+    "setup": "mkdir -p releases/current"
+  },
+  "Recursively copy ./src to ./src-backup, preserving timestamps and permissions": {
+    "setup": "mkdir -p src && printf 'x\\n' > src/main.c"
+  },
+  "Change into ~/projects/askk": {
+    "setup": "mkdir -p /root/projects/askk"
+  },
+  "Read the `name` of each item in `data.json` with `jq`": {
+    "setup": "apt-get update -qq && apt-get install -y -qq --no-install-recommends jq && printf '{\"items\":[{\"name\":\"a\"}]}' > data.json && printf '{\"version\":\"1.0\"}' > package.json"
+  },
+  "Pretty-print data.json with jq": {
+    "setup": "apt-get update -qq && apt-get install -y -qq --no-install-recommends jq && printf '{\"items\":[{\"name\":\"a\"}]}' > data.json && printf '{\"version\":\"1.0\"}' > package.json"
+  },
+  "Extract the version field from package.json with jq": {
+    "setup": "apt-get update -qq && apt-get install -y -qq --no-install-recommends jq && printf '{\"items\":[{\"name\":\"a\"}]}' > data.json && printf '{\"version\":\"1.0\"}' > package.json"
+  },
+  "Show the last 20 lines of app.log": {
+    "setup": "printf 'line\\n' > app.log"
+  },
+  "Show the first 10 lines of README.md": {
+    "setup": "printf 'readme\\n' > README.md"
+  },
+  "Count lines in access.log": {
+    "setup": "printf 'line\\n' > access.log"
+  },
+  "Search for TODO in ./src recursively": {
+    "setup": "mkdir -p src && printf 'TODO\\n' > src/a.txt"
+  },
+  "Goal: recursively find the literal text error[42] in ./logs. Failed command: grep -R error[42] ./logs. Error: grep: Unmatched [ or [^": {
+    "setup": "mkdir -p logs && printf 'error[42]\\n' > logs/a.log"
+  },
+  "Replace foo with bar in place in config.txt and keep a backup": {
+    "setup": "printf 'foo\\n' > config.txt"
+  },
+  "Print the second column of data.csv, comma separated": {
+    "setup": "printf 'a,b\\n' > data.csv"
+  },
+  "Sort unique lines in names.txt": {
+    "setup": "printf 'b\\na\\na\\n' > names.txt"
+  },
+  "Diff a.txt and b.txt, unified": {
+    "setup": "printf 'same\\n' > a.txt && printf 'same\\n' > b.txt"
+  },
+  "Search for redraw in this directory, print the first and third space-separated columns, then sort": {
+    "setup": "printf 'redraw x y\\n' > a.log"
+  },
+  "Convert all text in names.txt to lowercase": {
+    "setup": "printf 'ABC\\n' > names.txt"
+  },
+  "Show which lines in left.txt are not in right.txt": {
+    "setup": "printf 'a\\nb\\n' > left.txt && printf 'b\\n' > right.txt"
+  },
+  "Show git status": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Show a compact graph of the last 10 commits across all branches": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Show git log for last week with author names": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Undo the most recent local commit but keep the changes staged": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "List local branches": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Create and switch to branch feature/login": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Stash uncommitted changes": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Reapply the latest stash and keep it in the stash list": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Remove all .DS_Store files from git tracking without deleting them from disk": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "List git branches sorted by last commit": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Show unstaged changes": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Stage all changes": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Commit staged changes with message fix parser": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Initialize a new git repository": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Show who last touched each line of src/main.c": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Show remote URLs": {
+    "setup": "apt-get update && apt-get install -y --no-install-recommends git && git config --global user.email eval@example.com && git config --global user.name Eval && mkdir -p src && printf 'line one\\n' > src/main.c && git init -q && git add -A && git commit -qm one && printf 'line two\\n' >> src/main.c && git commit -qam two && printf 'tracked\\n' > tracked.txt && git add tracked.txt && git commit -qm tracked && printf 'secret\\n' > .DS_Store && git add .DS_Store && git commit -qm store && printf 'work\\n' >> src/main.c && git stash push -q && printf 'staged again\\n' > staged2.txt && git add staged2.txt && git remote add origin https://example.com/repo.git"
+  },
+  "Recursively gzip regular files under /var/log whose names end in .log and which were modified at least 31\u00d724 hours ago": {
+    "setup": "mkdir -p /var/log && touch -d '40 days ago' /var/log/old.log"
+  },
+  "Create a tar.gz of ./src named src.tar.gz": {
+    "setup": "mkdir -p src && printf 'x\\n' > src/main.c"
+  },
+  "Extract archive backup.tar.gz into a new empty directory ./restore": {
+    "setup": "mkdir -p src && printf 'x\\n' > src/main.c && tar -czf backup.tar.gz src"
+  },
+  "Dry-run rsync of ./data/ to /backup/data/, itemize changes, do not delete extras": {
+    "setup": "apt-get update -qq && apt-get install -y -qq --no-install-recommends rsync && mkdir -p data && printf 'x\\n' > data/a.txt"
+  },
+  "Delete empty directories below ./build, including parents that become empty during traversal, but not ./build itself": {
+    "setup": "mkdir -p build/empty/inner"
+  },
+  "Delete the file named --help in this folder": {
+    "setup": "touch -- ./--help"
+  }
+}
