@@ -391,7 +391,7 @@ def run_sandbox(config, jobs):
         "--job-name", "askk-eval", "--yes",
     ]
     try:
-        subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"warning: harbor failed: {error}", file=sys.stderr)
     names = {f"row-{row.index}": row.index for row, _command in jobs}
@@ -488,78 +488,56 @@ def run(config):
         table = []
         for repeat_index in range(config.repeat):
             calls = run_agent_calls(config, rows)
-            work = {}
+            records = []
             for row in rows:
                 raw = calls[row.index]
+                record = {
+                    "index": row.index,
+                    "repeat": repeat_index,
+                    "category": row.category,
+                    "input": row.input,
+                    "output": row.output,
+                    "generated": None,
+                    "match": "no",
+                    "sandbox": "no",
+                    "judge": "no",
+                    "final": "no",
+                    "error": None,
+                }
                 if isinstance(raw, AgentError):
-                    work[row.index] = (None, "no")
-                    table.append(
-                        {
-                            "index": row.index,
-                            "repeat": repeat_index,
-                            "category": row.category,
-                            "input": row.input,
-                            "output": row.output,
-                            "generated": None,
-                            "match": "error",
-                            "sandbox": "error",
-                            "judge": "error",
-                            "final": "error",
-                            "error": str(raw),
-                        }
-                    )
-                    continue
-                generated = extract_command(raw)
-                if generated is None:
-                    work[row.index] = (None, "no")
-                    continue
-                work[row.index] = (generated, "yes" if exact_match(generated, row.output) else "no")
+                    record.update(match="error", sandbox="error", judge="error", final="error", error=str(raw))
+                else:
+                    generated = extract_command(raw)
+                    if generated is not None:
+                        record["generated"] = generated
+                        record["match"] = "yes" if exact_match(generated, row.output) else "no"
+                records.append((record, row))
             sandbox_jobs = [
-                (row, work[row.index][0])
-                for row in rows
-                if work.get(row.index) and work[row.index][0] is not None
+                (row, record["generated"])
+                for record, row in records
+                if record["generated"] is not None
             ]
             sandbox = run_sandbox(config, sandbox_jobs) if sandbox_jobs else {}
+            for record, _row in records:
+                if record["final"] == "error" or record["generated"] is None:
+                    continue
+                record["sandbox"] = sandbox.get(record["index"], "error")
             judge_jobs = [
-                (row, work[row.index][0])
-                for row in rows
-                if work.get(row.index)
-                and work[row.index][0] is not None
-                and work[row.index][1] != "yes"
-                and sandbox.get(row.index) != "yes"
-                and sandbox.get(row.index) != "error"
+                (row, record["generated"])
+                for record, row in records
+                if record["generated"] is not None
+                and record["match"] != "yes"
+                and record["sandbox"] not in ("yes", "error")
             ]
             judged = run_judge(config, judge_jobs) if (config.judge_enabled and judge_jobs) else {}
-            for row in rows:
-                if any(
-                    item["index"] == row.index and item["repeat"] == repeat_index
-                    for item in table
-                ):
+            for record, _row in records:
+                if record["final"] == "error" or record["generated"] is None:
                     continue
-                generated, match = work.get(row.index, (None, "no"))
-                execution = sandbox.get(row.index, "no") if generated is not None else "no"
-                verdict = "no"
-                if config.judge_enabled and row.index in judged:
-                    result = judged[row.index]
-                    verdict = "error" if isinstance(result, JudgeError) else result
-                elif isinstance(judged.get(row.index), JudgeError):
-                    verdict = "error"
-                final = score_row(match, execution, verdict)
-                table.append(
-                    {
-                        "index": row.index,
-                        "repeat": repeat_index,
-                        "category": row.category,
-                        "input": row.input,
-                        "output": row.output,
-                        "generated": generated,
-                        "match": match,
-                        "sandbox": execution,
-                        "judge": verdict,
-                        "final": final,
-                        "error": None,
-                    }
-                )
+                if config.judge_enabled and record["index"] in judged:
+                    verdict = judged[record["index"]]
+                    record["judge"] = "error" if isinstance(verdict, JudgeError) else verdict
+                record["final"] = score_row(record["match"], record["sandbox"], record["judge"])
+            table.extend(record for record, _row in records)
     finally:
         stop_server(server)
     print(render_report(table, config.repeat))
@@ -569,7 +547,6 @@ def run(config):
     passed = sum(1 for item in scored if item["final"] == "yes")
     errors = sum(1 for item in table if item["final"] == "error")
     return compute_exit(passed, len(scored), errors, config.min_pass_rate)
-
 
 EXAMPLES_HEADER = """# Example requests
 
