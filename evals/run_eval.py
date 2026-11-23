@@ -395,12 +395,15 @@ def build_task_dir(workspace, row, command):
 
 def write_tasks(tasks_dir, rows):
     """Write one task folder per row and drop every other task folder."""
-    if os.path.isdir(tasks_dir):
+    if os.path.exists(tasks_dir):
+        if not os.path.isdir(tasks_dir) or os.path.islink(tasks_dir):
+            raise HarnessError(f"{tasks_dir} is not a folder")
         entries = os.listdir(tasks_dir)
         foreign = [
             name
             for name in entries
-            if not os.path.isfile(os.path.join(tasks_dir, name, "task.toml"))
+            if os.path.islink(os.path.join(tasks_dir, name))
+            or not os.path.isfile(os.path.join(tasks_dir, name, "task.toml"))
         ]
         if foreign:
             raise HarnessError(
@@ -436,6 +439,7 @@ def parse_rewards(jobs_dir, task_names):
 def run_sandbox(config, jobs, run_dir, repeat_index):
     tasks_dir = os.path.join(run_dir, "tasks", f"r{repeat_index}")
     jobs_dir = os.path.join(run_dir, "jobs")
+    repeat_dir = os.path.join(jobs_dir, f"r{repeat_index}")
     for row, command in jobs:
         build_task_dir(tasks_dir, row, command)
     cmd = [
@@ -458,9 +462,12 @@ def run_sandbox(config, jobs, run_dir, repeat_index):
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"warning: harbor failed: {error}", file=sys.stderr)
     names = {row.id: row.index for row, _command in jobs}
-    rewards = parse_rewards(jobs_dir, list(names))
+    rewards = parse_rewards(repeat_dir, list(names))
     return {
-        names[name]: (state, os.path.join("jobs", trial) if trial else None)
+        names[name]: (
+            state,
+            os.path.join("jobs", f"r{repeat_index}", trial) if trial else None,
+        )
         for name, (state, trial) in rewards.items()
     }
 
@@ -712,8 +719,11 @@ def main(argv=None):
         path = os.path.join(os.path.dirname(config.dataset_path), "examples.md")
         print(f"wrote {write_examples_md(rows, path)}")
         return 0
-    if config.build_tasks or config.reference:
-        if config.build_tasks:
+    if config.build_tasks is not None or config.reference:
+        if config.build_tasks is not None:
+            if not config.build_tasks:
+                print("error: --build-tasks needs a directory", file=sys.stderr)
+                return 2
             # --smoke only shortens an eval run, never the committed task folder.
             try:
                 rows = load_dataset(config.dataset_path)
@@ -722,7 +732,7 @@ def main(argv=None):
                 return 2
             try:
                 write_tasks(config.build_tasks, rows)
-            except HarnessError as error:
+            except (HarnessError, OSError) as error:
                 print(f"error: {error}", file=sys.stderr)
                 return 2
             print(f"wrote {len(rows)} tasks to {config.build_tasks}")

@@ -289,6 +289,38 @@ class SandboxTest(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("-o") + 1], os.path.join(run_dir, "jobs"))
         self.assertEqual(cmd[cmd.index("--job-name") + 1], "r1")
 
+    def test_run_sandbox_returns_trial_paths(self):
+        row = run_eval.Row(0, "c", "list the files", "ls", "a")
+        run_dir = os.path.join(self.tmp.name, "run")
+        os.makedirs(run_dir)
+
+        def fake_run(cmd, **kwargs):
+            path = os.path.join(run_dir, "jobs", "r1", "a__x", "verifier")
+            os.makedirs(path)
+            with open(os.path.join(path, "reward.txt"), "w", encoding="utf-8") as f:
+                f.write("1")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch("run_eval.subprocess.run", side_effect=fake_run):
+            result = run_eval.run_sandbox(run_eval.Config(), [(row, "ls")], run_dir, 1)
+        self.assertEqual(result, {0: ("yes", os.path.join("jobs", "r1", "a__x"))})
+
+    def test_run_sandbox_scopes_rewards_to_repeat(self):
+        row = run_eval.Row(0, "c", "list the files", "ls", "a")
+        run_dir = os.path.join(self.tmp.name, "run")
+        os.makedirs(run_dir)
+        old = os.path.join(run_dir, "jobs", "r0", "a__old", "verifier")
+        os.makedirs(old)
+        with open(os.path.join(old, "reward.txt"), "w", encoding="utf-8") as handle:
+            handle.write("1")
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch("run_eval.subprocess.run", side_effect=fake_run):
+            result = run_eval.run_sandbox(run_eval.Config(), [(row, "ls")], run_dir, 1)
+        self.assertEqual(result, {0: ("error", None)})
+
     def test_verifier_script_branches(self):
         normal = run_eval.Row(0, "c", "a", "true")
         refusal = run_eval.Row(
@@ -581,6 +613,37 @@ class MainTest(unittest.TestCase):
                 table = json.load(handle)
             self.assertIsNone(table[0]["trial"])
 
+    def test_missing_sandbox_reward_is_an_error_row(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = os.path.join(directory, "rows.json")
+            with open(dataset, "w", encoding="utf-8") as handle:
+                json.dump(
+                    [{"id": "a", "category": "A", "input": "first", "output": "ls"}],
+                    handle,
+                )
+            results = os.path.join(directory, "results")
+            with mock.patch.dict(
+                os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False
+            ):
+                with mock.patch("run_eval.start_transport", return_value=None):
+                    with mock.patch(
+                        "run_eval.run_agent_calls",
+                        return_value={0: "pwd\n"},
+                    ):
+                        with mock.patch("run_eval.run_sandbox", return_value={}):
+                            with mock.patch("run_eval.run_judge", return_value={}):
+                                code = run_eval.main(
+                                    ["--dataset", dataset, "--results-dir", results]
+                                )
+            self.assertEqual(code, 2)
+            run_dir = os.path.join(results, os.listdir(results)[0])
+            with open(
+                os.path.join(run_dir, "results.json"), encoding="utf-8"
+            ) as handle:
+                table = json.load(handle)
+            self.assertEqual(table[0]["sandbox"], "error")
+            self.assertIsNone(table[0]["trial"])
+
 
 class TaskFlagsTest(unittest.TestCase):
     def rows(self):
@@ -629,6 +692,44 @@ class TaskFlagsTest(unittest.TestCase):
                 run_eval.write_tasks(directory, self.rows())
             self.assertTrue(os.path.isdir(src))
 
+    def test_write_tasks_refuses_file_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = os.path.join(directory, "tasks")
+            with open(target, "w", encoding="utf-8") as handle:
+                handle.write("keep")
+            with self.assertRaises(run_eval.HarnessError):
+                run_eval.write_tasks(target, self.rows())
+            self.assertEqual(run_eval.main(["--build-tasks", target]), 2)
+            with open(target, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "keep")
+
+    def test_write_tasks_refuses_symlinked_task(self):
+        with tempfile.TemporaryDirectory() as directory:
+            real = os.path.join(directory, "real", "a")
+            os.makedirs(real)
+            with open(os.path.join(real, "task.toml"), "w", encoding="utf-8") as handle:
+                handle.write("keep")
+            target = os.path.join(directory, "tasks")
+            os.makedirs(target)
+            link = os.path.join(target, "a")
+            os.symlink(real, link)
+            with self.assertRaises(run_eval.HarnessError):
+                run_eval.write_tasks(target, self.rows())
+            self.assertTrue(os.path.islink(link))
+
+    def test_build_tasks_empty_dir_is_an_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.dict(
+                os.environ, {"ASKK_JUDGE_MODEL": "provider/judge"}, clear=False
+            ):
+                with mock.patch("run_eval.start_transport") as transport:
+                    with mock.patch("run_eval.run_agent_calls", return_value={}):
+                        code = run_eval.main(
+                            ["--build-tasks=", "--results-dir", directory]
+                        )
+            self.assertEqual(code, 2)
+            transport.assert_not_called()
+
     def test_build_tasks_ignores_smoke(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual(run_eval.main(["--build-tasks", directory, "--smoke"]), 0)
@@ -668,6 +769,18 @@ class TaskFlagsTest(unittest.TestCase):
             folders = os.listdir(directory)
             self.assertEqual(len(folders), 1)
             self.assertTrue(folders[0].endswith("-reference"))
+            with open(
+                os.path.join(directory, folders[0], "results.json"), encoding="utf-8"
+            ) as handle:
+                table = json.load(handle)
+            rows = run_eval.load_dataset("docs/examples.json")[:5]
+            self.assertEqual(
+                [(item["id"], item["sandbox"], item["trial"]) for item in table],
+                [
+                    (row.id, "no" if row.index == 1 else "yes", "jobs/r0/x")
+                    for row in rows
+                ],
+            )
 
             with mock.patch(
                 "run_eval.run_sandbox",

@@ -23,7 +23,7 @@ The harness has two legs: text comparison and sandbox execution. Harbor runs the
 
 The open choice was the text leg.
 
-1. A standard-library-only runner (chosen). The runner loads the dataset with `json.load`, compares text with plain functions, prints the report, and writes one JSON results file per run. It adds no dependency.
+1. A standard-library-only runner (chosen). The runner loads the dataset with `json.load`, compares text with plain functions, prints the report, and writes one results folder per run. It adds no dependency.
 2. MLflow GenAI evaluation. Not chosen. MLflow supplies dataset handling, scorer dispatch, and run storage, but the runner needs each of those in a few lines, and MLflow is the one heavyweight dependency in the design. It also carries a version risk: `mlflow.genai.evaluate` must accept rows that already contain `outputs` and must run scorers without a predict function. Its `Equivalence` judge is replaced by one `opencode run` call to the judge model.
 3. No judge. Not chosen. Many correct commands differ from the expected text in quoting or flag order, so the pass rate would read lower than the agent deserves.
 
