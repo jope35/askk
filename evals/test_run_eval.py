@@ -46,5 +46,53 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(rows[0].input, "List all files in this folder")
 
 
+class ExtractionTest(unittest.TestCase):
+    def test_extract_prefers_first_fenced_block(self):
+        raw = "Here is the command:\n```bash\nls -la\n```\nUse it."
+        self.assertEqual(run_eval.extract_command(raw), "ls -la")
+
+    def test_extract_falls_back_to_first_non_empty_line(self):
+        self.assertEqual(run_eval.extract_command("\n\npwd\n"), "pwd")
+
+    def test_extract_trims(self):
+        self.assertEqual(run_eval.extract_command("  ls -la  \n"), "ls -la")
+
+    def test_extract_matches_askk_awk(self):
+        source = open("askk.sh", encoding="utf-8").read()
+        program = source.split("awk '", 1)[1].split("'", 1)[0]
+        samples = [
+            "prose\n```\nls -la\n```\nmore",
+            "\n\npwd\n",
+            "  ls -la  \n",
+            "```\nfind . -name '*.py'\n| sort\n```",
+            "one\ntwo\n",
+        ]
+        for sample in samples:
+            with self.subTest(sample=sample):
+                result = run_eval.select_command(sample)
+                self.assertIsNotNone(result)
+                proc = __import__("subprocess").run(
+                    ["awk", program], input=sample, text=True, capture_output=True, check=True
+                )
+                self.assertEqual(result.strip(), proc.stdout.strip())
+
+    def test_extract_rejects_multiline(self):
+        self.assertIsNone(run_eval.extract_command("```\nls\npwd\n```"))
+
+    def test_extract_rejects_syntax_error(self):
+        self.assertIsNone(run_eval.extract_command("if true; then"))
+
+    def test_extract_accepts_pipeline(self):
+        self.assertEqual(
+            run_eval.extract_command("find . -name '*.png' | wc -l"),
+            "find . -name '*.png' | wc -l",
+        )
+
+    def test_exact_match(self):
+        self.assertTrue(run_eval.exact_match("ls -la", "ls -la"))
+        self.assertFalse(run_eval.exact_match("ls -la", "ls"))
+        self.assertTrue(run_eval.exact_match("  ls -la ", "ls -la\n"))
+
+
 if __name__ == "__main__":
     unittest.main()

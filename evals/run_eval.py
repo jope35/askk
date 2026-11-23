@@ -10,6 +10,7 @@ import argparse
 import dataclasses
 import json
 import os
+import subprocess
 import sys
 
 DEFAULT_MODEL = "claude-agent/system.ai.claude-haiku-5-5"
@@ -105,6 +106,40 @@ def validate_judge_config(config):
         raise HarnessError("ASKK_JUDGE_MODEL is not set and the judge is enabled")
     if config.judge_model == config.model:
         raise HarnessError("ASKK_JUDGE_MODEL must differ from ASKK_MODEL")
+
+
+def select_command(raw):
+    """Apply extraction steps 1 and 2: first fence or first non-empty line, trimmed."""
+    lines = raw.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip().startswith("```"):
+            body = []
+            for inner in lines[index + 1 :]:
+                if inner.strip().startswith("```"):
+                    break
+                body.append(inner.strip())
+            return "\n".join(body).strip()
+    for line in lines:
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def extract_command(raw):
+    """Return one valid command, or None when the output breaks the contract."""
+    candidate = select_command(raw)
+    if not candidate or "\n" in candidate:
+        return None
+    check = subprocess.run(
+        ["bash", "-n"], input=candidate, text=True, capture_output=True
+    )
+    if check.returncode != 0:
+        return None
+    return candidate
+
+
+def exact_match(generated, expected):
+    return generated.strip() == expected.strip()
 
 
 def main(argv=None):
